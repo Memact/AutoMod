@@ -9,6 +9,8 @@ BASE_DIR = Path(__file__).resolve().parent
 EMBED_COLOR = 0x00011B
 BOT_JOIN_ROLE_ID = 1485762440980336810
 MEMBER_JOIN_ROLE_ID = 1485762960851996822
+WELCOME_CHANNEL_ID = 1485763966515941618
+INTRO_CHANNEL_ID = 1485764265989246996
 
 DEFAULT_RULES = [
     ("Be respectful", "No harassment, hate speech, targeted insults, or personal attacks.", 2),

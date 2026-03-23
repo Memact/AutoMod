@@ -163,6 +163,14 @@ class Database:
                     payload TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS intro_acknowledgements (
+                    guild_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    message_id INTEGER,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (guild_id, user_id)
+                );
                 """
             )
             self.connection.commit()
@@ -702,3 +710,27 @@ class Database:
         with self._lock:
             self.connection.execute("DELETE FROM scheduled_actions WHERE id = ?", (action_id,))
             self.connection.commit()
+
+    def has_intro_acknowledgement(self, guild_id: int, user_id: int) -> bool:
+        self.ensure_guild(guild_id)
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT 1 FROM intro_acknowledgements WHERE guild_id = ? AND user_id = ?",
+                (guild_id, user_id),
+            ).fetchone()
+        return row is not None
+
+    def mark_intro_acknowledgement(self, guild_id: int, user_id: int, *, message_id: int | None = None) -> bool:
+        self.ensure_guild(guild_id)
+        with self._lock:
+            cursor = self.connection.execute(
+                """
+                INSERT OR IGNORE INTO intro_acknowledgements (
+                    guild_id, user_id, message_id, created_at
+                )
+                VALUES (?, ?, ?, ?)
+                """,
+                (guild_id, user_id, message_id, utcnow_iso()),
+            )
+            self.connection.commit()
+            return cursor.rowcount > 0

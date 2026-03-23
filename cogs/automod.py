@@ -9,7 +9,7 @@ import nextcord
 from nextcord.ext import commands
 
 from bot import MemactAutoModBot
-from config import BOT_JOIN_ROLE_ID, COMMAND_GUILD_IDS, MEMBER_JOIN_ROLE_ID
+from config import BOT_JOIN_ROLE_ID, COMMAND_GUILD_IDS, INTRO_CHANNEL_ID, MEMBER_JOIN_ROLE_ID, WELCOME_CHANNEL_ID
 from utils.checks import is_moderator_member, require_admin
 from utils.blocklist import DATASET_PRESETS, compile_blocked_term_pattern, fetch_dataset_terms_sync
 from utils.ui import build_embed, send_interaction
@@ -65,19 +65,74 @@ class AutomodCog(commands.Cog):
         self.spam_history.pop(key, None)
         self.repeat_history.pop(key, None)
 
-    async def _assign_join_role(self, member: nextcord.Member, role_id: int) -> None:
+    async def _assign_join_role(self, member: nextcord.Member, role_id: int) -> bool:
         role = member.guild.get_role(role_id)
         if role is None:
             print(f"Join role {role_id} was not found in guild {member.guild.id}.")
-            return
+            return False
         if role in member.roles:
-            return
+            return True
         try:
             await member.add_roles(role, reason="Automatic join role assignment.")
         except (nextcord.Forbidden, nextcord.HTTPException) as error:
             print(
                 f"Failed to assign join role {role_id} to user {member.id} "
                 f"in guild {member.guild.id}: {type(error).__name__}: {error}"
+            )
+            return False
+        return True
+
+    async def _send_welcome_message(self, member: nextcord.Member) -> None:
+        channel = member.guild.get_channel(WELCOME_CHANNEL_ID)
+        if channel is None:
+            print(f"Welcome channel {WELCOME_CHANNEL_ID} was not found in guild {member.guild.id}.")
+            return
+
+        embed = build_embed(
+            f"Welcome to {member.guild.name}",
+            f"Please post your intro in <#{INTRO_CHANNEL_ID}> so everyone can get to know you.",
+            footer="Memact AutoMod",
+        )
+        try:
+            await channel.send(
+                content=member.mention,
+                embed=embed,
+                allowed_mentions=nextcord.AllowedMentions(users=True, roles=False, everyone=False),
+            )
+        except (nextcord.Forbidden, nextcord.HTTPException) as error:
+            print(
+                f"Failed to send welcome message for user {member.id} "
+                f"in guild {member.guild.id}: {type(error).__name__}: {error}"
+            )
+
+    async def _acknowledge_intro_message(self, message: nextcord.Message) -> None:
+        if self.bot.db.has_intro_acknowledgement(message.guild.id, message.author.id):
+            return
+        if not self.bot.db.mark_intro_acknowledgement(
+            message.guild.id,
+            message.author.id,
+            message_id=message.id,
+        ):
+            return
+
+        embed = build_embed(
+            "Thanks for the intro",
+            "Thanks for introducing yourself. We're glad to have you here.",
+            footer="Memact AutoMod",
+        )
+        try:
+            await message.reply(embed=embed, mention_author=False)
+        except (nextcord.Forbidden, nextcord.HTTPException) as error:
+            print(
+                f"Failed to reply to intro message {message.id} "
+                f"in guild {message.guild.id}: {type(error).__name__}: {error}"
+            )
+        try:
+            await message.add_reaction("\U0001f44b")
+        except (nextcord.Forbidden, nextcord.HTTPException) as error:
+            print(
+                f"Failed to react to intro message {message.id} "
+                f"in guild {message.guild.id}: {type(error).__name__}: {error}"
             )
 
     async def _handle_violation(
@@ -152,79 +207,78 @@ class AutomodCog(commands.Cog):
             return
 
         config = self.bot.db.get_guild_config(message.guild.id)
-        if not config["automod_enabled"]:
-            return
-        if is_moderator_member(message.author, config):
-            return
-
         content = message.content or ""
-        if not content:
-            return
+        should_run_automod = config["automod_enabled"] and not is_moderator_member(message.author, config)
 
-        normalized_content = content.casefold()
-        for word, pattern in self._get_blocked_word_patterns(message.guild.id):
-            if pattern.search(normalized_content):
+        if should_run_automod and content:
+            normalized_content = content.casefold()
+            for word, pattern in self._get_blocked_word_patterns(message.guild.id):
+                if pattern.search(normalized_content):
+                    await self._handle_violation(
+                        message,
+                        rule_name="Be respectful",
+                        reason=f"Blocked word detected: `{word}`.",
+                        points=2,
+                    )
+                    return
+
+            if any(token in normalized_content for token in SUSPICIOUS_LINK_TOKENS) and URL_RE.search(content):
                 await self._handle_violation(
                     message,
-                    rule_name="Be respectful",
-                    reason=f"Blocked word detected: `{word}`.",
-                    points=2,
+                    rule_name="No scams or malicious links",
+                    reason="Suspicious link pattern detected.",
+                    points=3,
                 )
                 return
 
-        if any(token in normalized_content for token in SUSPICIOUS_LINK_TOKENS) and URL_RE.search(content):
-            await self._handle_violation(
-                message,
-                rule_name="No scams or malicious links",
-                reason="Suspicious link pattern detected.",
-                points=3,
-            )
-            return
+            if config["invite_filter_enabled"] and INVITE_RE.search(content):
+                await self._handle_violation(
+                    message,
+                    rule_name="No unsolicited advertising",
+                    reason="Invite link detected without approval.",
+                    points=1,
+                )
+                return
 
-        if config["invite_filter_enabled"] and INVITE_RE.search(content):
-            await self._handle_violation(
-                message,
-                rule_name="No unsolicited advertising",
-                reason="Invite link detected without approval.",
-                points=1,
-            )
-            return
-
-        if config["mention_filter_enabled"] and len(message.mentions) >= config["mention_threshold"]:
-            await self._handle_violation(
-                message,
-                rule_name="No spam",
-                reason=f"Mass mention detected with {len(message.mentions)} mentions.",
-                points=1,
-            )
-            return
-
-        if config["caps_filter_enabled"]:
-            letter_count, caps_ratio = self._caps_ratio(content)
-            if letter_count >= config["caps_min_length"] and caps_ratio >= config["caps_ratio"]:
+            if config["mention_filter_enabled"] and len(message.mentions) >= config["mention_threshold"]:
                 await self._handle_violation(
                     message,
                     rule_name="No spam",
-                    reason=f"Excessive caps detected at {caps_ratio:.0%}.",
+                    reason=f"Mass mention detected with {len(message.mentions)} mentions.",
                     points=1,
                 )
                 return
 
-        if config["spam_filter_enabled"] or config["repeat_filter_enabled"]:
-            triggered, rule_name = self._check_spam(
-                message.guild.id,
-                message.author.id,
-                content,
-                config=config,
-                now_ts=message.created_at.timestamp(),
-            )
-            if triggered:
-                await self._handle_violation(
-                    message,
-                    rule_name=rule_name or "No spam",
-                    reason="Spam or repeated message threshold reached.",
-                    points=1,
+            if config["caps_filter_enabled"]:
+                letter_count, caps_ratio = self._caps_ratio(content)
+                if letter_count >= config["caps_min_length"] and caps_ratio >= config["caps_ratio"]:
+                    await self._handle_violation(
+                        message,
+                        rule_name="No spam",
+                        reason=f"Excessive caps detected at {caps_ratio:.0%}.",
+                        points=1,
+                    )
+                    return
+
+            if config["spam_filter_enabled"] or config["repeat_filter_enabled"]:
+                triggered, rule_name = self._check_spam(
+                    message.guild.id,
+                    message.author.id,
+                    content,
+                    config=config,
+                    now_ts=message.created_at.timestamp(),
                 )
+                if triggered:
+                    await self._handle_violation(
+                        message,
+                        rule_name=rule_name or "No spam",
+                        reason="Spam or repeated message threshold reached.",
+                        points=1,
+                    )
+                    return
+
+        if message.channel.id == INTRO_CHANNEL_ID:
+            await self._acknowledge_intro_message(message)
 
     @commands.Cog.listener()
     async def on_member_join(self, member: nextcord.Member) -> None:
@@ -236,14 +290,16 @@ class AutomodCog(commands.Cog):
 
         config = self.bot.db.get_guild_config(member.guild.id)
         if not config["raid_mode"] and config["min_account_age_hours"] <= 0:
-            await self._assign_join_role(member, MEMBER_JOIN_ROLE_ID)
+            if await self._assign_join_role(member, MEMBER_JOIN_ROLE_ID):
+                await self._send_welcome_message(member)
             return
 
         required_hours = max(config["min_account_age_hours"], 72 if config["raid_mode"] else 0)
         age = nextcord.utils.utcnow() - member.created_at
         age_hours = age.total_seconds() / 3600
         if age_hours >= required_hours:
-            await self._assign_join_role(member, MEMBER_JOIN_ROLE_ID)
+            if await self._assign_join_role(member, MEMBER_JOIN_ROLE_ID):
+                await self._send_welcome_message(member)
             return
 
         reason = f"Account younger than required minimum of {required_hours} hours."
