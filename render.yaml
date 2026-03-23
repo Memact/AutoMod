@@ -1,0 +1,20 @@
+services:
+  - type: worker
+    name: memact-automod
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: MEMACT_TOKEN
+        sync: false
+      - key: MEMACT_GUILD_ID
+        value: "1404684829785718885"
+      - key: MEMACT_DATABASE
+        value: /opt/render/project/src/data/memact_automod.db
+      - key: PYTHONUNBUFFERED
+        value: "1"
+    disk:
+      name: memact-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1

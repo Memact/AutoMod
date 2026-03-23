@@ -28,3 +28,34 @@ excluded from the code license unless a file explicitly says otherwise. See
 3. Copy `.env.example` to `.env` and fill in `MEMACT_TOKEN`.
 4. Install dependencies with `pip install -r requirements.txt`.
 5. Run the bot with `python main.py`.
+
+## Deployment
+
+This project is set up to run as a long-lived worker process on hosts such as
+Render, Railway, Fly.io, Docker-based VPS setups, and other Python worker
+platforms.
+
+- `.python-version` pins Python to `3.12`
+- `Procfile` exposes a standard worker entrypoint: `python main.py`
+- `render.yaml` configures a Render background worker with a persistent disk
+- `MEMACT_DATABASE` can be either a relative local file or an absolute mounted
+  path such as `/opt/render/project/src/data/memact_automod.db`
+
+### Render
+
+1. Push this repo to GitHub.
+2. In Render, create a new **Background Worker** from the repo or use the
+   included `render.yaml` Blueprint.
+3. Set `MEMACT_TOKEN` in the Render dashboard when prompted.
+4. Keep `MEMACT_GUILD_ID=1404684829785718885` unless you intentionally want a
+   different server lock.
+5. If you use SQLite, keep the persistent disk attached so moderation data and
+   rules survive restarts and redeploys.
+
+### Other hosts
+
+Use the same environment variables from `.env.example` and run:
+
+```bash
+python main.py
+```

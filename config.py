@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import os
 
+BASE_DIR = Path(__file__).resolve().parent
 EMBED_COLOR = 0x00011B
 
 DEFAULT_RULES = [
@@ -28,7 +29,7 @@ class Settings:
 
 
 def _load_dotenv() -> None:
-    env_path = Path(".env")
+    env_path = BASE_DIR / ".env"
     if not env_path.exists():
         return
 
@@ -70,13 +71,17 @@ def load_settings() -> Settings:
     if not token:
         raise RuntimeError("MEMACT_TOKEN is required. Add it to your environment or .env file.")
 
-    database_path = os.getenv("MEMACT_DATABASE", "memact_automod.db").strip() or "memact_automod.db"
+    database_path_raw = os.getenv("MEMACT_DATABASE", "memact_automod.db").strip() or "memact_automod.db"
+    database_path = Path(database_path_raw).expanduser()
+    if not database_path.is_absolute():
+        database_path = BASE_DIR / database_path
+    database_path.parent.mkdir(parents=True, exist_ok=True)
     guild_id_raw = os.getenv("MEMACT_GUILD_ID", "").strip()
     dev_guild_id = int(guild_id_raw) if guild_id_raw.isdigit() else None
 
     return Settings(
         token=token,
-        database_path=database_path,
+        database_path=str(database_path),
         dev_guild_id=dev_guild_id,
         application_id=get_application_id_from_token(token),
     )

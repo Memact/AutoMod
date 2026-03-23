@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+from pathlib import Path
 import sqlite3
 import threading
 from typing import Any
@@ -45,8 +46,10 @@ def utcnow_iso() -> str:
 
 class Database:
     def __init__(self, path: str) -> None:
-        self.path = path
-        self.connection = sqlite3.connect(path, check_same_thread=False)
+        database_path = Path(path).expanduser()
+        database_path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = str(database_path)
+        self.connection = sqlite3.connect(self.path, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         self._lock = threading.Lock()
         self._initialize()
