@@ -354,9 +354,11 @@ class AutomodCog(commands.Cog):
         interaction: nextcord.Interaction,
         dataset: str = nextcord.SlashOption(
             required=False,
-            default="ldnoobw_en",
+            default="strong_en",
             choices={
-                "LDNOOBW English (Recommended)": "ldnoobw_en",
+                "Strong English (Recommended)": "strong_en",
+                "Strong English + Hindi": "strong_en_hi",
+                "LDNOOBW English": "ldnoobw_en",
                 "LDNOOBW Hindi": "ldnoobw_hi",
                 "LDNOOBW English + Hindi": "ldnoobw_en_hi",
             },
