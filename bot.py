@@ -34,6 +34,7 @@ class MemactAutoModBot(commands.Bot):
         self.settings = settings
         self.db = Database(settings.database_path)
         self.theme_color = EMBED_COLOR
+        self.keepalive_state: Any | None = None
         self._scheduler_task: asyncio.Task | None = None
         self._commands_synced = False
         self.add_application_command_check(self._allowed_guild_check)
@@ -49,6 +50,8 @@ class MemactAutoModBot(commands.Bot):
         self.add_all_application_commands()
 
     async def close(self) -> None:
+        if self.keepalive_state is not None:
+            self.keepalive_state.set_status("stopped", "Bot process is shutting down.")
         if self._scheduler_task is not None:
             self._scheduler_task.cancel()
             try:
@@ -62,6 +65,8 @@ class MemactAutoModBot(commands.Bot):
         local_command_count = len(self.get_all_application_commands())
         if self.user is not None:
             print(f"Logged in as {self.user} ({self.user.id})")
+            if self.keepalive_state is not None:
+                self.keepalive_state.set_status("ready", f"Connected as {self.user}.")
         print(f"Loaded {local_command_count} local application command groups.")
         if not self._commands_synced:
             try:

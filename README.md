@@ -28,3 +28,27 @@ excluded from the code license unless a file explicitly says otherwise. See
 3. Copy `.env.example` to `.env` and fill in `MEMACT_TOKEN`.
 4. Install dependencies with `pip install -r requirements.txt`.
 5. Run the bot with `python main.py`.
+
+## Replit Workaround
+
+This repo includes a lightweight keepalive HTTP endpoint for Replit-style
+hosting workarounds. When the app detects Replit environment variables, or when
+`MEMACT_KEEPALIVE_PORT` is set, it opens a tiny HTTP server on `/` and
+`/healthz`.
+
+- `.replit` maps internal port `10000` to external port `80`
+- the keepalive server listens on `0.0.0.0`
+- UptimeRobot can ping the published app URL to help keep an Autoscale app warm
+
+Important caveats:
+
+- this is a workaround, not true always-on bot hosting
+- Replit Starter currently includes one free published app, and the published
+  app expires after 30 days but can be re-published
+- published app storage is not persistent, so SQLite data can reset
+
+Useful optional environment variables:
+
+- `MEMACT_KEEPALIVE_PORT=10000`
+- `MEMACT_KEEPALIVE_HOST=0.0.0.0`
+- `MEMACT_ENABLE_KEEPALIVE=true`
