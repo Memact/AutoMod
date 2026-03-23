@@ -31,26 +31,36 @@ excluded from the code license unless a file explicitly says otherwise. See
 
 ## Deployment
 
-This project is set up to run as a long-lived worker process on hosts such as
-Render, Railway, Fly.io, Docker-based VPS setups, and other Python worker
-platforms.
+This project can run either as a worker-style process or as a web service with
+an internal health endpoint for hosts that require port binding.
 
 - `.python-version` pins Python to `3.12`
-- `Procfile` exposes a standard worker entrypoint: `python main.py`
-- `render.yaml` configures a Render background worker with a persistent disk
+- `Procfile` exposes a web-compatible entrypoint: `python main.py`
+- `render.yaml` configures a Render free web service with a `/healthz` route
 - `MEMACT_DATABASE` can be either a relative local file or an absolute mounted
   path such as `/opt/render/project/src/data/memact_automod.db`
 
 ### Render
 
 1. Push this repo to GitHub.
-2. In Render, create a new **Background Worker** from the repo or use the
-   included `render.yaml` Blueprint.
+2. In Render, create a new **Web Service** from the repo or use the included
+   `render.yaml` Blueprint.
 3. Set `MEMACT_TOKEN` in the Render dashboard when prompted.
 4. Keep `MEMACT_GUILD_ID=1404684829785718885` unless you intentionally want a
    different server lock.
-5. If you use SQLite, keep the persistent disk attached so moderation data and
-   rules survive restarts and redeploys.
+5. Set `MEMACT_DATABASE=data/memact_automod.db`.
+
+Render Web Services must bind to `0.0.0.0:$PORT`, so the app now starts a tiny
+HTTP server on `/` and `/healthz` whenever the `PORT` environment variable is
+present.
+
+Important free-tier caveats on Render:
+
+- Free web services spin down after 15 minutes without inbound traffic
+- a spun-down bot disconnects from Discord until the web service wakes up again
+- free web services do not support persistent disks
+- SQLite data is therefore lost whenever the service restarts, redeploys, or
+  spins down
 
 ### Other hosts
 
