@@ -12,7 +12,7 @@ from bot import MemactAutoModBot
 from config import BOT_JOIN_ROLE_ID, COMMAND_GUILD_IDS, INTRO_CHANNEL_ID, MEMBER_JOIN_ROLE_ID, WELCOME_CHANNEL_ID
 from utils.checks import is_moderator_member, require_admin
 from utils.blocklist import DATASET_PRESETS, compile_blocked_term_pattern, fetch_dataset_terms_sync
-from utils.ui import build_embed, safe_dm, send_interaction
+from utils.ui import build_embed, send_interaction
 
 
 INVITE_RE = re.compile(r"(discord\.gg|discord\.com/invite)/[A-Za-z0-9-]+", re.IGNORECASE)
@@ -88,6 +88,20 @@ class AutomodCog(commands.Cog):
             f"Please post your intro in the channel <#{INTRO_CHANNEL_ID}> so everyone can get to know you.",
         )
 
+    async def _send_welcome_dm(self, member: nextcord.Member, embed: nextcord.Embed) -> None:
+        dm_content = (
+            f"Welcome to **{member.guild.name}**.\n"
+            f"Please post your intro in the channel <#{INTRO_CHANNEL_ID}> so everyone can get to know you."
+        )
+        try:
+            await member.send(content=dm_content, embed=embed)
+            return
+        except (nextcord.Forbidden, nextcord.HTTPException) as error:
+            print(
+                f"Failed to send welcome DM to user {member.id} "
+                f"in guild {member.guild.id}: {type(error).__name__}: {error}"
+            )
+
     async def _send_welcome_message(self, member: nextcord.Member) -> None:
         embed = self._build_welcome_embed(member)
         channel = member.guild.get_channel(WELCOME_CHANNEL_ID)
@@ -106,11 +120,7 @@ class AutomodCog(commands.Cog):
                     f"in guild {member.guild.id}: {type(error).__name__}: {error}"
                 )
 
-        if not await safe_dm(member, embed=embed):
-            print(
-                f"Failed to send welcome DM for user {member.id} "
-                f"in guild {member.guild.id}."
-            )
+        await self._send_welcome_dm(member, embed)
 
     async def _acknowledge_intro_message(self, message: nextcord.Message) -> None:
         if self.bot.db.has_intro_acknowledgement(message.guild.id, message.author.id):
@@ -296,16 +306,16 @@ class AutomodCog(commands.Cog):
 
         config = self.bot.db.get_guild_config(member.guild.id)
         if not config["raid_mode"] and config["min_account_age_hours"] <= 0:
-            if await self._assign_join_role(member, MEMBER_JOIN_ROLE_ID):
-                await self._send_welcome_message(member)
+            await self._assign_join_role(member, MEMBER_JOIN_ROLE_ID)
+            await self._send_welcome_message(member)
             return
 
         required_hours = max(config["min_account_age_hours"], 72 if config["raid_mode"] else 0)
         age = nextcord.utils.utcnow() - member.created_at
         age_hours = age.total_seconds() / 3600
         if age_hours >= required_hours:
-            if await self._assign_join_role(member, MEMBER_JOIN_ROLE_ID):
-                await self._send_welcome_message(member)
+            await self._assign_join_role(member, MEMBER_JOIN_ROLE_ID)
+            await self._send_welcome_message(member)
             return
 
         reason = f"Account younger than required minimum of {required_hours} hours."
