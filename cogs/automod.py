@@ -90,8 +90,7 @@ class AutomodCog(commands.Cog):
 
         embed = build_embed(
             f"Welcome to {member.guild.name}",
-            f"Please post your intro in <#{INTRO_CHANNEL_ID}> so everyone can get to know you.",
-            footer="Memact AutoMod",
+            f"Please post your intro in the channel <#{INTRO_CHANNEL_ID}> so everyone can get to know you.",
         )
         try:
             await channel.send(
@@ -118,7 +117,6 @@ class AutomodCog(commands.Cog):
         embed = build_embed(
             "Thanks for the intro",
             "Thanks for introducing yourself. We're glad to have you here.",
-            footer="Memact AutoMod",
         )
         try:
             await message.reply(embed=embed, mention_author=False)

@@ -58,7 +58,6 @@ class CommunityCog(commands.Cog):
                 ("Target", member.mention, True),
                 ("Evidence", evidence_url or "None", False),
             ],
-            footer="Memact AutoMod report queue",
         )
         await channel.send(embed=embed)
         await send_interaction(interaction, embed=build_embed("Report Submitted", f"Your report for {member.mention} has been sent to the moderators."))
@@ -107,7 +106,6 @@ class CommunityCog(commands.Cog):
                 ("Original Action", case["action"], True),
                 ("Original Reason", case["reason"], False),
             ],
-            footer="Memact AutoMod appeal queue",
         )
         await channel.send(embed=embed)
         await send_interaction(interaction, embed=build_embed("Appeal Submitted", f"Your appeal for case #{case_id} has been sent to the moderators."))

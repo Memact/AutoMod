@@ -20,11 +20,10 @@ class EmbedToolsCog(commands.Cog):
         title: str,
         description: str,
         *,
-        footer: str | None = None,
         image_url: str | None = None,
         thumbnail_url: str | None = None,
     ) -> nextcord.Embed:
-        embed = build_embed(title, description, footer=footer)
+        embed = build_embed(title, description)
         if image_url:
             embed.set_image(url=image_url)
         if thumbnail_url:
@@ -46,14 +45,13 @@ class EmbedToolsCog(commands.Cog):
         channel: nextcord.TextChannel,
         title: str,
         description: str,
-        footer: Optional[str] = nextcord.SlashOption(required=False),
         image_url: Optional[str] = nextcord.SlashOption(required=False),
         thumbnail_url: Optional[str] = nextcord.SlashOption(required=False),
     ) -> None:
         moderator = await require_moderator(interaction)
         if moderator is None:
             return
-        embed = self._make_embed(title, description, footer=footer, image_url=image_url, thumbnail_url=thumbnail_url)
+        embed = self._make_embed(title, description, image_url=image_url, thumbnail_url=thumbnail_url)
         await channel.send(embed=embed)
         await send_interaction(interaction, embed=build_embed("Embed Sent", f"Posted the embed in {channel.mention}."))
 
@@ -64,7 +62,6 @@ class EmbedToolsCog(commands.Cog):
         name: str,
         title: str,
         description: str,
-        footer: Optional[str] = nextcord.SlashOption(required=False),
         image_url: Optional[str] = nextcord.SlashOption(required=False),
         thumbnail_url: Optional[str] = nextcord.SlashOption(required=False),
     ) -> None:
@@ -76,7 +73,6 @@ class EmbedToolsCog(commands.Cog):
             name,
             title,
             description,
-            footer=footer,
             image_url=image_url,
             thumbnail_url=thumbnail_url,
         )
@@ -99,7 +95,6 @@ class EmbedToolsCog(commands.Cog):
         embed = self._make_embed(
             template["title"],
             template["description"],
-            footer=template["footer"],
             image_url=template["image_url"],
             thumbnail_url=template["thumbnail_url"],
         )

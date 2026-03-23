@@ -158,7 +158,7 @@ class MemactAutoModBot(commands.Bot):
         channel = guild.get_channel(channel_id)
         if channel is None:
             return
-        embed = build_embed(title, description, footer="Memact AutoMod log", fields=fields)
+        embed = build_embed(title, description, fields=fields)
         try:
             await channel.send(embed=embed)
         except (nextcord.Forbidden, nextcord.HTTPException):
@@ -202,7 +202,7 @@ class MemactAutoModBot(commands.Bot):
         fields = [("Server", guild_name, False), ("Case", str(case_id), True), ("Action", action, True)]
         if duration is not None:
             fields.append(("Duration", format_timedelta(duration), True))
-        embed = build_embed("Moderation Notice", reason, fields=fields, footer="Memact AutoMod")
+        embed = build_embed("Moderation Notice", reason, fields=fields)
         return await safe_dm(user, embed=embed)
 
     async def apply_warning(
