@@ -154,6 +154,15 @@ class Database:
                     created_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS ticket_abuse_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id INTEGER NOT NULL,
+                    author_id INTEGER NOT NULL,
+                    kind TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS scheduled_actions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     guild_id INTEGER NOT NULL,
@@ -666,6 +675,48 @@ class Database:
             rows = self.connection.execute(" ".join(query), tuple(values)).fetchall()
         return [dict(row) for row in rows]
 
+    def get_latest_report_by_author(
+        self,
+        guild_id: int,
+        author_id: int,
+        *,
+        kind: str | None = None,
+    ) -> dict[str, Any] | None:
+        self.ensure_guild(guild_id)
+        query = ["SELECT * FROM reports WHERE guild_id = ? AND author_id = ?"]
+        values: list[Any] = [guild_id, author_id]
+        if kind is not None:
+            query.append("AND kind = ?")
+            values.append(kind)
+        query.append("ORDER BY created_at DESC LIMIT 1")
+        with self._lock:
+            row = self.connection.execute(" ".join(query), tuple(values)).fetchone()
+        return dict(row) if row is not None else None
+
+    def list_recent_reports_by_author(
+        self,
+        guild_id: int,
+        author_id: int,
+        *,
+        kind: str | None = None,
+        since_iso: str | None = None,
+        limit: int = 25,
+    ) -> list[dict[str, Any]]:
+        self.ensure_guild(guild_id)
+        query = ["SELECT * FROM reports WHERE guild_id = ? AND author_id = ?"]
+        values: list[Any] = [guild_id, author_id]
+        if kind is not None:
+            query.append("AND kind = ?")
+            values.append(kind)
+        if since_iso is not None:
+            query.append("AND created_at >= ?")
+            values.append(since_iso)
+        query.append("ORDER BY created_at DESC LIMIT ?")
+        values.append(limit)
+        with self._lock:
+            rows = self.connection.execute(" ".join(query), tuple(values)).fetchall()
+        return [dict(row) for row in rows]
+
     def update_report_status(self, guild_id: int, report_id: int, status: str) -> bool:
         self.ensure_guild(guild_id)
         with self._lock:
@@ -675,6 +726,47 @@ class Database:
             )
             self.connection.commit()
             return cursor.rowcount > 0
+
+    def add_ticket_abuse_event(
+        self,
+        guild_id: int,
+        author_id: int,
+        *,
+        kind: str,
+        reason: str,
+    ) -> int:
+        self.ensure_guild(guild_id)
+        with self._lock:
+            cursor = self.connection.execute(
+                """
+                INSERT INTO ticket_abuse_events (
+                    guild_id, author_id, kind, reason, created_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (guild_id, author_id, kind, reason, utcnow_iso()),
+            )
+            self.connection.commit()
+            return int(cursor.lastrowid)
+
+    def count_recent_ticket_abuse_events(
+        self,
+        guild_id: int,
+        author_id: int,
+        *,
+        since_iso: str,
+    ) -> int:
+        self.ensure_guild(guild_id)
+        with self._lock:
+            row = self.connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM ticket_abuse_events
+                WHERE guild_id = ? AND author_id = ? AND created_at >= ?
+                """,
+                (guild_id, author_id, since_iso),
+            ).fetchone()
+        return int(row["count"]) if row is not None else 0
 
     def schedule_action(
         self,
