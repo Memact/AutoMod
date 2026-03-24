@@ -29,6 +29,52 @@ excluded from the code license unless a file explicitly says otherwise. See
 4. Install dependencies with `pip install -r requirements.txt`.
 5. Run the bot with `python main.py`.
 
+## Railway Deployment
+
+Railway is a better fit for this bot than a Replit keepalive loop because it
+supports persistent long-running services without requiring a public uptime
+ping.
+
+Recommended settings:
+
+1. Push this repository to GitHub.
+2. In Railway, create a new `Service` from the repository.
+3. Let Railway use the root `Dockerfile` automatically.
+4. Keep this as a persistent service and leave `Serverless` disabled.
+5. Add the environment variables:
+   - `MEMACT_TOKEN`
+   - `MEMACT_GUILD_ID` (optional but recommended if this bot should stay locked
+     to one server)
+   - `MEMACT_DATABASE`
+6. Skip `Public Networking` unless you specifically want to expose the optional
+   `/healthz` endpoint.
+
+Important Railway notes:
+
+- Railway services are persistent by default. `Serverless` is a separate
+  opt-in feature that sleeps inactive services, so it should stay off for a
+  24/7 Discord bot.
+- Every service gets ephemeral storage, but it does not persist across
+  deployments. The default `memact_automod.db` path is only safe for testing.
+- If you want to keep using SQLite, attach a volume at `/data` and set
+  `MEMACT_DATABASE=/data/memact_automod.db`.
+- Railway volumes are persistent, but each service can only have one volume and
+  replicas cannot be used with attached volumes.
+- Railway trial and free accounts do not support the `Always` restart policy.
+  On those plans, `On Failure` is limited to 10 restarts.
+- Railway's Limited Trial has restricted outbound networking. If your account
+  is not fully verified, that can interfere with a Discord bot connecting out
+  to Discord.
+
+Practical deployment options:
+
+- Quick test: deploy the service with default ephemeral storage
+- Better 24/7 setup: add a Railway volume, set
+  `MEMACT_DATABASE=/data/memact_automod.db`, and use a paid plan with restart
+  policy set to `Always`
+
+The included `Dockerfile` is ready for Railway and other container-based hosts.
+
 ## Replit Workaround
 
 This repo includes a lightweight keepalive HTTP endpoint for Replit-style
