@@ -30,6 +30,8 @@ excluded from the code license unless a file explicitly says otherwise. See
 5. Run the bot with `python main.py`.
 6. Optional: set `MEMACT_STREAM_TITLE` and `MEMACT_STREAM_URL` to control the
    streaming presence. Default title is `Moderating this server`.
+7. Optional: set `CONTENT_SAFETY_ENDPOINT` and `CONTENT_SAFETY_KEY` to enable
+   Azure AI Content Safety image moderation (nudity/inappropriate images).
 
 ## Railway Deployment
 

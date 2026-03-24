@@ -3,13 +3,18 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from datetime import timedelta
 import asyncio
+import base64
+import json
+import os
 import re
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 import nextcord
 from nextcord.ext import commands
 
 from bot import MemactAutoModBot
-from config import BOT_JOIN_ROLE_ID, COMMAND_GUILD_IDS, INTRO_CHANNEL_ID, MEMBER_JOIN_ROLE_ID, WELCOME_CHANNEL_ID
+from config import BOT_JOIN_ROLE_ID, COMMAND_GUILD_IDS, INTRO_CHANNEL_ID, MEMBER_JOIN_ROLE_ID, WELCOME_CHANNEL_ID, load_env
 from utils.checks import is_moderator_member, require_admin
 from utils.blocklist import (
     DATASET_PRESETS,
@@ -25,6 +30,8 @@ from utils.ui import build_embed, send_interaction
 INVITE_RE = re.compile(r"(discord\.gg|discord\.com/invite)/[A-Za-z0-9-]+", re.IGNORECASE)
 URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 SUSPICIOUS_LINK_TOKENS = ("discord-gifts", "nitro-free", "steamcomrnunity", "free-nitro", "claim-prize")
+AZURE_CONTENT_SAFETY_API_VERSION = "2024-09-01"
+AZURE_MAX_IMAGE_BYTES = 4 * 1024 * 1024
 
 
 class AutomodCog(commands.Cog):
@@ -34,6 +41,13 @@ class AutomodCog(commands.Cog):
         self.repeat_history: dict[tuple[int, int], deque[tuple[float, str]]] = defaultdict(deque)
         self.blocked_word_cache: dict[int, list[tuple[str, re.Pattern[str]]]] = {}
         self._last_history_cleanup_ts = 0.0
+        load_env()
+        self._azure_endpoint = os.getenv("CONTENT_SAFETY_ENDPOINT", "").strip().rstrip("/")
+        self._azure_key = os.getenv("CONTENT_SAFETY_KEY", "").strip()
+        try:
+            self._azure_sexual_threshold = int(os.getenv("CONTENT_SAFETY_SEXUAL_THRESHOLD", "4").strip())
+        except ValueError:
+            self._azure_sexual_threshold = 4
 
     def _invalidate_blocked_word_cache(self, guild_id: int) -> None:
         self.blocked_word_cache.pop(guild_id, None)
@@ -219,6 +233,42 @@ class AutomodCog(commands.Cog):
 
         return False, None
 
+    def _analyze_image_with_azure(self, image_bytes: bytes) -> int | None:
+        if not self._azure_endpoint or not self._azure_key:
+            return None
+        url = f"{self._azure_endpoint}/contentsafety/image:analyze?api-version={AZURE_CONTENT_SAFETY_API_VERSION}"
+        payload = {
+            "image": {"content": base64.b64encode(image_bytes).decode("ascii")},
+            "categories": ["Sexual"],
+            "outputType": "FourSeverityLevels",
+        }
+        request = Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Ocp-Apim-Subscription-Key": self._azure_key,
+            },
+        )
+        try:
+            with urlopen(request, timeout=20) as response:
+                body = response.read().decode("utf-8")
+        except (HTTPError, URLError) as error:
+            print(f"Azure Content Safety request failed: {type(error).__name__}: {error}")
+            return None
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            print("Azure Content Safety returned invalid JSON.")
+            return None
+        for entry in data.get("categoriesAnalysis", []):
+            if entry.get("category") == "Sexual":
+                try:
+                    return int(entry.get("severity", 0))
+                except (TypeError, ValueError):
+                    return 0
+        return None
+
     @commands.Cog.listener()
     async def on_message(self, message: nextcord.Message) -> None:
         if message.guild is None or message.author.bot:
@@ -296,6 +346,30 @@ class AutomodCog(commands.Cog):
                         rule_name=rule_name or "No spam",
                         reason="Spam or repeated message threshold reached.",
                         points=1,
+                    )
+                    return
+
+        if should_run_automod and message.attachments:
+            for attachment in message.attachments:
+                if attachment.content_type and not attachment.content_type.startswith("image/"):
+                    continue
+                if attachment.size and attachment.size > AZURE_MAX_IMAGE_BYTES:
+                    print(f"Skipping image {attachment.filename}: size {attachment.size} exceeds limit.")
+                    continue
+                try:
+                    image_bytes = await attachment.read()
+                except (nextcord.HTTPException, nextcord.Forbidden) as error:
+                    print(f"Failed to read attachment {attachment.filename}: {type(error).__name__}: {error}")
+                    continue
+                severity = await asyncio.to_thread(self._analyze_image_with_azure, image_bytes)
+                if severity is None:
+                    continue
+                if severity >= self._azure_sexual_threshold:
+                    await self._handle_violation(
+                        message,
+                        rule_name="No NSFW outside allowed spaces",
+                        reason=f"Inappropriate image detected (severity {severity}).",
+                        points=2,
                     )
                     return
 
