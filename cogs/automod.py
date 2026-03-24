@@ -11,7 +11,7 @@ from nextcord.ext import commands
 from bot import MemactAutoModBot
 from config import BOT_JOIN_ROLE_ID, COMMAND_GUILD_IDS, INTRO_CHANNEL_ID, MEMBER_JOIN_ROLE_ID, WELCOME_CHANNEL_ID
 from utils.checks import is_moderator_member, require_admin
-from utils.blocklist import DATASET_PRESETS, compile_blocked_term_pattern, fetch_dataset_terms_sync
+from utils.blocklist import DATASET_PRESETS, LIGHT_WORD_ALLOWLIST, compile_blocked_term_pattern, fetch_dataset_terms_sync
 from utils.ui import build_embed, send_interaction
 
 
@@ -38,6 +38,7 @@ class AutomodCog(commands.Cog):
         patterns = [
             (term, compile_blocked_term_pattern(term))
             for term in self.bot.db.list_blocked_words(guild_id)
+            if term not in LIGHT_WORD_ALLOWLIST
         ]
         self.blocked_word_cache[guild_id] = patterns
         return patterns
@@ -486,6 +487,10 @@ class AutomodCog(commands.Cog):
         if mode == "replace":
             removed = self.bot.db.clear_blocked_words(interaction.guild.id)
         added = self.bot.db.bulk_add_blocked_words(interaction.guild.id, imported_terms)
+        lenient_removed = 0
+        for term in LIGHT_WORD_ALLOWLIST:
+            if self.bot.db.remove_blocked_word(interaction.guild.id, term):
+                lenient_removed += 1
         self._invalidate_blocked_word_cache(interaction.guild.id)
         total = self.bot.db.count_blocked_words(interaction.guild.id)
         label = DATASET_PRESETS[dataset]["label"]
@@ -497,6 +502,7 @@ class AutomodCog(commands.Cog):
                     ("Mode", mode.title(), True),
                     ("Removed", str(removed), True),
                     ("Added", str(added), True),
+                    ("Lenient Removed", str(lenient_removed), True),
                     ("Total Configured", str(total), True),
                 ],
             ),

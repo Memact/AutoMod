@@ -45,6 +45,15 @@ DATASET_PRESETS = {
     },
 }
 
+LIGHT_WORD_ALLOWLIST = {
+    "ass",
+    "crap",
+    "damn",
+    "hell",
+    "piss",
+    "shit",
+}
+
 SIMPLE_TERM_RE = re.compile(r"^[\w'-]+$", re.UNICODE)
 LETTER_SUBSTITUTIONS = {
     "a": "[a4@]",
@@ -80,6 +89,8 @@ def normalize_blocked_terms(terms: Iterable[str]) -> list[str]:
         normalized = normalize_blocked_term(term)
         if normalized is None or normalized in seen:
             continue
+        if normalized in LIGHT_WORD_ALLOWLIST:
+            continue
         seen.add(normalized)
         normalized_terms.append(normalized)
     return normalized_terms
@@ -104,12 +115,10 @@ def parse_dataset_terms(payload_text: str, data_format: str) -> list[str]:
         payload = json.loads(payload_text)
         if not isinstance(payload, list):
             raise ValueError("The blocked-word dataset returned an unexpected format.")
-        return [str(item) for item in payload]
+        return [str(item) for item in payload if str(item).strip()]
 
     if data_format == "newline_text":
         terms = [line.strip() for line in payload_text.splitlines() if line.strip()]
-        if not terms:
-            raise ValueError("The blocked-word dataset did not contain any terms.")
         return terms
 
     raise ValueError("Unsupported blocked-word dataset format.")
@@ -128,5 +137,10 @@ def fetch_dataset_terms_sync(preset: str) -> list[str]:
         )
         with urlopen(request, timeout=20) as response:
             payload_text = response.read().decode("utf-8")
-        all_terms.extend(parse_dataset_terms(payload_text, source["format"]))
-    return normalize_blocked_terms(all_terms)
+        terms = parse_dataset_terms(payload_text, source["format"])
+        if terms:
+            all_terms.extend(terms)
+    normalized = normalize_blocked_terms(all_terms)
+    if not normalized:
+        raise ValueError("The blocked-word dataset did not contain any terms.")
+    return normalized
