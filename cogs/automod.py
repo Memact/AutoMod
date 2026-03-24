@@ -25,6 +25,52 @@ from utils.ui import build_embed, send_interaction
 INVITE_RE = re.compile(r"(discord\.gg|discord\.com/invite)/[A-Za-z0-9-]+", re.IGNORECASE)
 URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 SUSPICIOUS_LINK_TOKENS = ("discord-gifts", "nitro-free", "steamcomrnunity", "free-nitro", "claim-prize")
+
+PROMO_KEYWORDS = (
+    "promo",
+    "promotion",
+    "discount",
+    "coupon",
+    "sale",
+    "deal",
+    "offer",
+    "limited time",
+    "giveaway",
+    "free",
+    "subscribe",
+    "follow",
+    "check out",
+    "visit",
+    "join",
+    "invite",
+    "server",
+    "guild",
+    "discord",
+    "youtube",
+    "twitch",
+    "instagram",
+    "tiktok",
+    "twitter",
+    "x.com",
+    "shop",
+    "store",
+    "merch",
+    "commission",
+)
+
+PROMO_PHRASE_RE = re.compile(
+    r"\b("
+    r"join (my|our) (server|discord)"
+    r"|follow (me|us)"
+    r"|subscribe to (my|our)"
+    r"|check out (my|our)"
+    r"|visit (my|our)"
+    r"|use code"
+    r"|limited time"
+    r"|free giveaway"
+    r")\b",
+    re.IGNORECASE,
+)
 class AutomodCog(commands.Cog):
     def __init__(self, bot: MemactAutoModBot) -> None:
         self.bot = bot
@@ -217,6 +263,13 @@ class AutomodCog(commands.Cog):
 
         return False, None
 
+    def _check_promotion(self, content: str) -> bool:
+        normalized = " ".join(content.lower().split())
+        has_url = URL_RE.search(content) is not None
+        if has_url:
+            return any(keyword in normalized for keyword in PROMO_KEYWORDS) or PROMO_PHRASE_RE.search(normalized) is not None
+        return PROMO_PHRASE_RE.search(normalized) is not None
+
 
     @commands.Cog.listener()
     async def on_message(self, message: nextcord.Message) -> None:
@@ -257,6 +310,15 @@ class AutomodCog(commands.Cog):
                     message,
                     rule_name="No unsolicited advertising",
                     reason="Invite link detected without approval.",
+                    points=1,
+                )
+                return
+
+            if self._check_promotion(content):
+                await self._handle_violation(
+                    message,
+                    rule_name="No unsolicited advertising",
+                    reason="Promotional content detected.",
                     points=1,
                 )
                 return
