@@ -4,17 +4,36 @@ import nextcord
 from nextcord.ext import commands
 
 from bot import MemactAutoModBot
-from config import COMMAND_GUILD_IDS
+from config import COMMAND_GUILD_IDS, TICKET_CHANNEL_ID
 from utils.checks import require_moderator
-from utils.ui import build_embed, send_interaction
+from utils.ui import build_embed, safe_dm, send_interaction
 
 
 class CommunityCog(commands.Cog):
     def __init__(self, bot: MemactAutoModBot) -> None:
         self.bot = bot
 
+    def _build_ticket_embed(
+        self,
+        *,
+        title: str,
+        description: str,
+        ticket_id: int,
+        kind: str,
+        author: nextcord.abc.User,
+        fields: list[tuple[str, str, bool]] | None = None,
+    ) -> nextcord.Embed:
+        base_fields = [
+            ("Ticket ID", str(ticket_id), True),
+            ("Type", kind, True),
+            ("Author", author.mention, True),
+        ]
+        if fields:
+            base_fields.extend(fields)
+        return build_embed(title, description, fields=base_fields)
+
     @nextcord.slash_command(
-        description="Staff queue commands for reports and appeals",
+        description="Staff queue commands for reports, appeals, and tickets",
         guild_ids=COMMAND_GUILD_IDS,
         default_member_permissions=nextcord.Permissions(manage_messages=True),
     )
@@ -49,12 +68,13 @@ class CommunityCog(commands.Cog):
             reason,
             evidence_url=evidence_url or None,
         )
-        embed = build_embed(
-            "New Member Report",
-            reason,
+        embed = self._build_ticket_embed(
+            title="New Ticket",
+            description=reason,
+            ticket_id=report_id,
+            kind="Report",
+            author=interaction.user,
             fields=[
-                ("Report ID", str(report_id), True),
-                ("Reporter", interaction.user.mention, True),
                 ("Target", member.mention, True),
                 ("Evidence", evidence_url or "None", False),
             ],
@@ -96,12 +116,13 @@ class CommunityCog(commands.Cog):
             reason,
             case_id=case_id,
         )
-        embed = build_embed(
-            "New Case Appeal",
-            reason,
+        embed = self._build_ticket_embed(
+            title="New Ticket",
+            description=reason,
+            ticket_id=appeal_id,
+            kind="Appeal",
+            author=interaction.user,
             fields=[
-                ("Appeal ID", str(appeal_id), True),
-                ("Appealing User", interaction.user.mention, True),
                 ("Case ID", str(case_id), True),
                 ("Original Action", case["action"], True),
                 ("Original Reason", case["reason"], False),
@@ -109,6 +130,49 @@ class CommunityCog(commands.Cog):
         )
         await channel.send(embed=embed)
         await send_interaction(interaction, embed=build_embed("Appeal Submitted", f"Your appeal for case #{case_id} has been sent to the moderators."))
+
+    @nextcord.slash_command(name="raise", description="Raise a ticket for the moderators", guild_ids=COMMAND_GUILD_IDS)
+    async def raise_ticket(
+        self,
+        interaction: nextcord.Interaction,
+        subject: str,
+        details: str,
+        evidence_url: str = nextcord.SlashOption(required=False, default=""),
+    ) -> None:
+        if interaction.guild is None:
+            await send_interaction(interaction, content="This command only works inside a server.", ephemeral=True)
+            return
+        channel = interaction.guild.get_channel(TICKET_CHANNEL_ID)
+        if not isinstance(channel, nextcord.TextChannel):
+            await send_interaction(interaction, content="The ticket channel could not be found.", ephemeral=True)
+            return
+        ticket_id = self.bot.db.add_report(
+            interaction.guild.id,
+            "ticket",
+            interaction.user.id,
+            None,
+            details,
+            evidence_url=evidence_url or None,
+        )
+        embed = self._build_ticket_embed(
+            title="New Ticket",
+            description=details,
+            ticket_id=ticket_id,
+            kind="Raise",
+            author=interaction.user,
+            fields=[
+                ("Subject", subject, True),
+                ("Evidence", evidence_url or "None", False),
+            ],
+        )
+        await channel.send(embed=embed)
+        confirmation = build_embed(
+            "Ticket Submitted",
+            f"Your ticket `{ticket_id}` has been sent to the moderators.",
+            fields=[("Subject", subject, True)],
+        )
+        await safe_dm(interaction.user, embed=confirmation)
+        await send_interaction(interaction, embed=confirmation)
 
     @queue.subcommand(description="View recent report and appeal queue entries")
     async def view(
@@ -121,6 +185,7 @@ class CommunityCog(commands.Cog):
                 "All": "all",
                 "Reports": "report",
                 "Appeals": "appeal",
+                "Tickets": "ticket",
             },
         ),
         status: str = nextcord.SlashOption(
