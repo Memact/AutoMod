@@ -18,6 +18,7 @@ from utils.bluesky import (
     truncate_post_text,
 )
 from utils.checks import require_admin
+from utils.time import from_iso
 from utils.ui import build_embed, send_interaction
 
 
@@ -224,11 +225,11 @@ class BlueskyCog(commands.Cog):
         embed = build_embed(
             title,
             truncate_post_text(post.text),
-            fields=[
-                ("Source", post.post_url, False),
-                ("Posted At", post.created_at or "Unknown", True),
-            ],
+            fields=[("Source", post.post_url, False)],
         )
+        timestamp = from_iso(post.created_at)
+        if timestamp is not None:
+            embed.timestamp = timestamp
         author_label = f"{post.display_name} (@{post.handle})"
         if post.avatar_url:
             embed.set_author(name=author_label, icon_url=post.avatar_url)
