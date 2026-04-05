@@ -42,6 +42,10 @@ def build_post_url(handle: str, uri: str) -> str:
     return f"https://bsky.app/profile/{normalize_handle(handle)}/post/{record_key}"
 
 
+def build_profile_url(handle: str) -> str:
+    return f"https://bsky.app/profile/{normalize_handle(handle)}"
+
+
 def truncate_post_text(text: str, limit: int = 3500) -> str:
     cleaned = text.strip()
     if not cleaned:

@@ -12,6 +12,7 @@ from utils.bluesky import (
     BlueskyAPIError,
     BlueskyFeedPage,
     BlueskyPost,
+    build_profile_url,
     fetch_author_feed_page,
     latest_post_uri,
     normalize_handle,
@@ -239,6 +240,18 @@ class BlueskyCog(commands.Cog):
             embed.set_image(url=post.image_url)
         return embed
 
+    def _build_post_view(self, post: BlueskyPost) -> nextcord.ui.View:
+        view = nextcord.ui.View(timeout=None)
+        view.add_item(nextcord.ui.Button(label="Visit", style=nextcord.ButtonStyle.link, url=post.post_url))
+        view.add_item(
+            nextcord.ui.Button(
+                label="Follow",
+                style=nextcord.ButtonStyle.link,
+                url=build_profile_url(post.handle),
+            )
+        )
+        return view
+
     async def _deliver_post(
         self,
         channel: nextcord.TextChannel,
@@ -249,7 +262,11 @@ class BlueskyCog(commands.Cog):
         label = "Selected Bluesky post" if manual else "New Bluesky post"
         content = f"{label} from `@{post.handle}`"
         title = "Bluesky Post" if manual else "New Bluesky Post"
-        await channel.send(content=content, embed=self._build_post_embed(post, title=title))
+        await channel.send(
+            content=content,
+            embed=self._build_post_embed(post, title=title),
+            view=self._build_post_view(post),
+        )
 
     def _has_reached_sync_point(self, post: BlueskyPost, feed_config: dict[str, Any]) -> bool:
         last_post_uri = str(feed_config.get("last_post_uri") or "").strip()
