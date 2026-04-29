@@ -90,20 +90,23 @@ credentials are required for read-only mirroring.
 
 The catch-up state is stored in the same SQLite database as the rest of the
 bot's data. If you want the Bluesky relay to survive deploys and restarts,
-store `MEMACT_DATABASE` on persistent storage such as a Railway volume.
+store `MEMACT_DATABASE` somewhere that JustRunMy.App keeps between restarts and
+deployments.
 
-## Railway Deployment
+## JustRunMy.App Git Deployment
 
-Railway is a better fit for this bot than a Replit keepalive loop because it
-supports persistent long-running services without requiring a public uptime
-ping.
+This bot is ready for JustRunMy.App Git deployment. The root `Dockerfile`
+installs `requirements.txt`, copies the repo, and starts the long-running bot
+with `python main.py`.
 
 Recommended settings:
 
 1. Push this repository to GitHub.
-2. In Railway, create a new `Service` from the repository.
-3. Let Railway use the root `Dockerfile` automatically.
-4. Keep this as a persistent service and leave `Serverless` disabled.
+2. In JustRunMy.App, create a Discord bot or container app and choose the Git
+   deployment method.
+3. Connect the repository or add the JustRunMy.App Git remote shown in the
+   dashboard, then deploy from the `main` branch.
+4. Use the root `Dockerfile` as the build target.
 5. Add the environment variables:
    - `MEMACT_TOKEN`
    - `MEMACT_GUILD_ID` (optional but recommended if this bot should stay locked
@@ -111,52 +114,30 @@ Recommended settings:
    - `MEMACT_DATABASE`
    - `MEMACT_STREAM_TITLE` (optional)
    - `MEMACT_STREAM_URL` (optional but required for streaming presence)
-6. Skip `Public Networking` unless you specifically want to expose the optional
-   `/healthz` endpoint.
+6. Start the app and watch the JustRunMy.App logs until the bot prints that it
+   logged in and synced commands.
 
-Important Railway notes:
+Important JustRunMy.App notes:
 
-- Railway services are persistent by default. `Serverless` is a separate
-  opt-in feature that sleeps inactive services, so it should stay off for a
-  24/7 Discord bot.
-- Every service gets ephemeral storage, but it does not persist across
-  deployments. The default `memact_automod.db` path is only safe for testing.
-- If you want to keep using SQLite, attach a volume at `/data` and set
-  `MEMACT_DATABASE=/data/memact_automod.db`.
-- Railway volumes are persistent, but each service can only have one volume and
-  replicas cannot be used with attached volumes.
-- Railway trial and free accounts do not support the `Always` restart policy.
-  On those plans, `On Failure` is limited to 10 restarts.
-- Railway's Limited Trial has restricted outbound networking. If your account
-  is not fully verified, that can interfere with a Discord bot connecting out
-  to Discord.
+- Discord bots do not need a public HTTP port. Add one only if you want to use
+  the optional `/healthz` endpoint.
+- Keep secrets such as `MEMACT_TOKEN` in JustRunMy.App environment variables,
+  not in `.env`.
+- Use the dashboard logs, web shell, and auto-restart controls for debugging
+  and recovery.
+- For durable SQLite data, set `MEMACT_DATABASE` to a path that lives on
+  persistent app storage. This preserves moderation cases, queue state, and
+  Bluesky sync cursors across restarts and Git deploys.
 
-Practical deployment options:
+The included `Dockerfile` is ready for JustRunMy.App and other Docker-based
+hosts.
 
-- Quick test: deploy the service with default ephemeral storage
-- Better 24/7 setup: add a Railway volume, set
-  `MEMACT_DATABASE=/data/memact_automod.db`, and use a paid plan with restart
-  policy set to `Always`
+## Optional Keepalive Endpoint
 
-The included `Dockerfile` is ready for Railway and other container-based hosts.
-
-## Replit Workaround
-
-This repo includes a lightweight keepalive HTTP endpoint for Replit-style
-hosting workarounds. When the app detects Replit environment variables, or when
-`MEMACT_KEEPALIVE_PORT` is set, it opens a tiny HTTP server on `/` and
+This repo includes a lightweight HTTP endpoint for hosts that need a health
+check or public status route. For normal JustRunMy.App Discord bot hosting, no
+public port is required. If you do enable the endpoint, it serves `/` and
 `/healthz`.
-
-- `.replit` maps internal port `10000` to external port `80`
-- the keepalive server listens on `0.0.0.0`
-- UptimeRobot can ping the published app URL to help keep an Autoscale app warm
-
-Important caveats:
-
-- this is a workaround, not true always-on bot hosting
-- Replit Starter currently includes one free published app, and the published
-  app expires after 30 days but can be re-published
-- published app storage is not persistent, so SQLite data can reset
 
 Useful optional environment variables:
 
