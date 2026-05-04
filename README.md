@@ -29,7 +29,7 @@ community operations:
 
 ## License
 
-This repository's source code is open source under the Apache-2.0 license. See
+This repository's source code is open source under the MIT license. See
 [LICENSE](LICENSE).
 
 Memact branding and assets are not open source. The `Memact` name, logos,

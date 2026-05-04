@@ -1,6 +1,6 @@
 # Branding And Asset Use
 
-The code in this repository is open source under [Apache-2.0](LICENSE).
+The code in this repository is open source under the [MIT License](LICENSE).
 
 Memact branding is not open source. Unless a specific file says otherwise, the
 following are excluded from the open-source license and are all rights reserved:
