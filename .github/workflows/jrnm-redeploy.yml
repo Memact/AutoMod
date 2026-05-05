@@ -8,14 +8,26 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: jrnm-redeploy-main
+  cancel-in-progress: false
+
 jobs:
   redeploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Validate JustRunMyApp git URL
+        run: |
+          if [ -z "${{ secrets.JRNM_GIT_URL }}" ]; then
+            echo "JRNM_GIT_URL secret is missing"
+            exit 1
+          fi
 
       - name: Push to JustRunMyApp remote
         run: |
