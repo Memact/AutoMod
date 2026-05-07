@@ -1,4 +1,4 @@
-[![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?logo=discord&logoColor=white)](https://discord.gg/WjKDeWuGy5)
+[![Discord](https://img.shields.io/badge/Discord-Join_Server-00011B?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/WjKDeWuGy5)
 
 # Memact AutoMod
 
