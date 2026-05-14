@@ -66,6 +66,16 @@ class SafetyCog(commands.Cog):
             return "Unknown"
         return f"{role.mention} (`{role.id}`)"
 
+    def _format_sentinel_event(self, event: dict) -> str:
+        channel_id = event.get("channel_id")
+        channel = f"<#{channel_id}>" if channel_id else "unknown channel"
+        created_at = str(event.get("created_at", "unknown time")).replace("+00:00", " UTC")
+        summary = self._clip(str(event.get("summary", "-")), 180)
+        return (
+            f"`#{event['id']}` s{event['severity']} {event['category']} "
+            f"<@{event['user_id']}> in {channel} - {summary} ({created_at})"
+        )
+
     def _backup_files(self) -> list[Path]:
         backup_dir = Path(self.bot.settings.backup_dir)
         return sorted(
@@ -629,6 +639,66 @@ class SafetyCog(commands.Cog):
             ],
         )
         await send_interaction(interaction, embed=embed)
+
+    @security.subcommand(description="Show silent Sentinel risk intelligence for a member")
+    async def sentinel(self, interaction: nextcord.Interaction, member: nextcord.Member) -> None:
+        admin = await require_admin(interaction)
+        if admin is None:
+            return
+        profile = self.bot.db.get_sentinel_profile(interaction.guild.id, member.id)
+        events = self.bot.db.list_recent_sentinel_events(interaction.guild.id, user_id=member.id, limit=5)
+        if profile is None:
+            await send_interaction(
+                interaction,
+                embed=build_embed(
+                    "Sentinel Profile",
+                    f"No silent Sentinel events are stored for {member.mention}.",
+                ),
+            )
+            return
+        lines = [self._format_sentinel_event(event) for event in events]
+        await send_interaction(
+            interaction,
+            embed=build_embed(
+                "Sentinel Profile",
+                "Silent intelligence only. Sentinel does not automatically punish members.",
+                fields=[
+                    ("Member", f"{member.mention} (`{member.id}`)", False),
+                    ("Risk Score", f"{float(profile['risk_score']):.1f}/100", True),
+                    ("Events", str(profile["event_count"]), True),
+                    ("Last Event", str(profile["last_event_at"]).replace("+00:00", " UTC"), True),
+                    ("Recent Signals", "\n".join(lines) if lines else "No recent events.", False),
+                ],
+            ),
+        )
+
+    @security.subcommand(description="Show recent silent Sentinel events")
+    async def sentinel_recent(
+        self,
+        interaction: nextcord.Interaction,
+        limit: int = nextcord.SlashOption(required=False, default=10, min_value=1, max_value=20),
+        min_severity: Optional[int] = nextcord.SlashOption(required=False, min_value=1, max_value=5),
+    ) -> None:
+        admin = await require_admin(interaction)
+        if admin is None:
+            return
+        events = self.bot.db.list_recent_sentinel_events(
+            interaction.guild.id,
+            limit=limit,
+            min_severity=min_severity,
+        )
+        if not events:
+            await send_interaction(interaction, embed=build_embed("Sentinel Events", "No Sentinel events are stored yet."))
+            return
+        lines = [self._format_sentinel_event(event) for event in events]
+        await send_interaction(
+            interaction,
+            embed=build_embed(
+                "Sentinel Events",
+                "\n".join(lines),
+                footer="Silent review queue. No automatic punishment is applied by Sentinel.",
+            ),
+        )
 
     @security.subcommand(description="Adjust security and audit settings")
     async def settings(

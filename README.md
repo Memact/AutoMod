@@ -15,8 +15,10 @@ community operations:
 
 - compact `/staff` moderation console for bans, kicks, timeouts, warnings,
   purge, locks, slowmode, case history, and raid cleanup
-- Discord-native AutoMod protection for spam, mention raids, and scam-link
-  patterns without bot-side profanity policing
+- Discord-native AutoMod protection for spam, mention raids, hate-speech
+  presets, and scam-link patterns without bot-side profanity policing
+- silent Sentinel intelligence for raids, scams, harassment, hate-speech
+  patterns, and rolling member risk review
 - security guardrails for anti-nuke detection, audit logging, and SQLite
   backups
 - SQLite-backed case history, warning points, scheduled actions, queue entries,
@@ -36,8 +38,12 @@ This repository's source code is open source under the MIT license. See
   locks, slowmode, case history, and raid cleanup
 - SQLite-backed case history, warning points, temp-ban scheduling, and server
   config
-- native Discord AutoMod rules for spam, mention raids, and known scam-link
-  patterns
+- native Discord AutoMod rules for spam, mention raids, hate-speech presets,
+  and known scam-link patterns
+- silent Sentinel detection for protected-class hate patterns, self-harm
+  harassment, scam links, homoglyph domains, misleading markdown links,
+  new-account bursts, and mention raids
+- persistent Sentinel event history and member risk profiles for staff review
 - anti-nuke protection for destructive server bursts such as mass bans, kicks,
   channel deletes, and role deletes
 - richer audit logging for message edits/deletes, role changes, channel
@@ -59,8 +65,10 @@ This repository's source code is open source under the MIT license. See
 4. Copy `.env.example` to `.env` and fill in `MEMACT_TOKEN`.
 5. Install dependencies with `pip install -r requirements.txt`.
 6. Run the bot with `python main.py`.
-7. Run `/automod install` once in Discord to create or refresh the native
-   Memact Guard rules.
+7. Run `/automod install` once in Discord to create or refresh native Memact
+   Guard rules, including the hate-speech preset.
+8. Use `/security sentinel_recent` or `/security sentinel` to review silent
+   risk intelligence after the bot has seen real traffic.
 
 ## Bluesky Relay
 
@@ -94,17 +102,25 @@ credentials are required for read-only mirroring.
 
 ## Moderation Model
 
-Memact AutoMod now uses a native-first moderation model. Discord's own AutoMod
-handles the raw message protection layer, while the bot focuses on staff
-workflow, cases, appeals, audit logs, anti-raid behavior, and backups.
+Memact AutoMod uses a layered moderation model. Discord's own AutoMod handles
+the raw hard-block layer, while the bot focuses on staff workflow, cases,
+appeals, audit logs, anti-raid behavior, backups, and silent intelligence.
 
 In practice:
 
 - the bot does not warn members for ordinary profanity or casual keywords
 - GIFs, all-caps messages, memes, and normal chat are not judged by a custom
   keyword engine
-- native Discord AutoMod blocks spam, mention raids, and known scam-link
-  patterns before they become moderation cases
+- native Discord AutoMod blocks spam, mention raids, hate-speech slur presets,
+  and known scam-link patterns before they become moderation cases
+- Sentinel quietly records high-signal suspicious messages without deleting,
+  warning, timing out, or publicly interrupting the member
+- Sentinel watches for protected-class violent targeting, dehumanization,
+  self-harm harassment, scam phrasing, lookalike domains, misleading markdown
+  links, mention bursts, and new-account raid patterns
+- Sentinel keeps content hashes, clipped excerpts, signals, confidence,
+  severity, and decaying member risk scores in SQLite so restarts do not erase
+  the review trail
 - manual warnings are staff decisions through `/staff warn`
 - warning revokes are member-friendly through `/staff unwarn_latest`
 - appeals work with or without a case ID
@@ -115,6 +131,9 @@ Useful staff commands:
 - `/automod view`: show Memact Guard native-rule status
 - `/automod toggle`: enable or disable Memact Guard
 - `/automod mention_limit`: tune native mention-raid protection
+- `/security sentinel`: show a member's silent risk profile and recent
+  Sentinel events
+- `/security sentinel_recent`: show the latest high-signal Sentinel events
 - `/staff warnings`: show a member's active warning points and active warning
   cases
 - `/staff unwarn_latest`: revoke the latest active warning for a member without
@@ -125,10 +144,11 @@ Useful staff commands:
 
 ### Persistence
 
-The catch-up state is stored in the same SQLite database as the rest of the
-bot's data. If you want the Bluesky relay to survive deploys and restarts,
-store `MEMACT_DATABASE` somewhere that JustRunMy.App keeps between restarts and
-deployments.
+Cases, warning points, scheduled actions, security events, Sentinel events,
+Sentinel risk profiles, queue state, and Bluesky catch-up cursors are stored in
+the same SQLite database. If you want moderation intelligence and relay state
+to survive deploys and restarts, store `MEMACT_DATABASE` somewhere that
+JustRunMy.App keeps between restarts and deployments.
 
 ## JustRunMy.App Git Deployment
 
@@ -180,6 +200,8 @@ SQLite-backed configuration style as the rest of the bot.
 - `/security view`: show anti-nuke, audit logging, and backup status
 - `/security settings`: tune anti-nuke thresholds, audit logs, and the master
   security switch
+- `/security sentinel`: review one member's silent Sentinel risk profile
+- `/security sentinel_recent`: review recent silent Sentinel detections
 - `/security backup_create`: create an immediate SQLite backup
 - `/security backup_list`: show recent backup files
 

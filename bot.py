@@ -73,7 +73,7 @@ class MemactAutoModBot(commands.Bot):
         try:
             await self.change_presence(status=nextcord.Status.online, activity=None)
         except Exception as error:
-            print(f"Failed to set streaming presence: {type(error).__name__}: {error}")
+            print(f"Failed to set online presence: {type(error).__name__}: {error}")
         print(f"Loaded {local_command_count} local application command groups.")
         if not self._commands_synced:
             try:

@@ -45,10 +45,23 @@ CONFIG_COLUMNS = {
 }
 
 ROLE_LIST_COLUMNS = {"mod_role_ids", "admin_role_ids"}
+SENTINEL_DAILY_DECAY = 0.88
 
 
 def utcnow_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def decayed_sentinel_score(score: float, last_event_at: str | None, *, now_iso: str | None = None) -> float:
+    if not last_event_at:
+        return max(0.0, min(100.0, score))
+    try:
+        then = datetime.fromisoformat(last_event_at)
+        now = datetime.fromisoformat(now_iso or utcnow_iso())
+    except ValueError:
+        return max(0.0, min(100.0, score))
+    age_days = max(0.0, (now - then).total_seconds() / 86400)
+    return max(0.0, min(100.0, score * (SENTINEL_DAILY_DECAY ** age_days)))
 
 
 class Database:
@@ -231,6 +244,32 @@ class Database:
                     details TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS sentinel_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    channel_id INTEGER,
+                    message_id INTEGER,
+                    category TEXT NOT NULL,
+                    severity INTEGER NOT NULL,
+                    confidence REAL NOT NULL,
+                    summary TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    excerpt TEXT,
+                    signals_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS sentinel_profiles (
+                    guild_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    risk_score REAL NOT NULL DEFAULT 0,
+                    event_count INTEGER NOT NULL DEFAULT 0,
+                    last_event_at TEXT,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (guild_id, user_id)
+                );
                 """
             )
             for column_name, column_sql in (
@@ -390,6 +429,130 @@ class Database:
             event["details"] = json.loads(event["details"] or "{}")
             events.append(event)
         return events
+
+    def add_sentinel_event(
+        self,
+        guild_id: int,
+        user_id: int,
+        *,
+        channel_id: int | None,
+        message_id: int | None,
+        category: str,
+        severity: int,
+        confidence: float,
+        summary: str,
+        content_hash: str,
+        excerpt: str | None,
+        signals: list[dict[str, Any]],
+    ) -> int:
+        self.ensure_guild(guild_id)
+        now = utcnow_iso()
+        bounded_severity = max(1, min(5, int(severity)))
+        bounded_confidence = max(0.0, min(1.0, float(confidence)))
+        with self._lock:
+            cursor = self.connection.execute(
+                """
+                INSERT INTO sentinel_events (
+                    guild_id, user_id, channel_id, message_id, category, severity,
+                    confidence, summary, content_hash, excerpt, signals_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    guild_id,
+                    user_id,
+                    channel_id,
+                    message_id,
+                    category,
+                    bounded_severity,
+                    bounded_confidence,
+                    summary,
+                    content_hash,
+                    excerpt,
+                    json.dumps(signals),
+                    now,
+                ),
+            )
+            profile = self.connection.execute(
+                "SELECT * FROM sentinel_profiles WHERE guild_id = ? AND user_id = ?",
+                (guild_id, user_id),
+            ).fetchone()
+            increment = bounded_severity * bounded_confidence * 8
+            if profile is None:
+                risk_score = min(100.0, increment)
+                self.connection.execute(
+                    """
+                    INSERT INTO sentinel_profiles (
+                        guild_id, user_id, risk_score, event_count, last_event_at, updated_at
+                    )
+                    VALUES (?, ?, ?, 1, ?, ?)
+                    """,
+                    (guild_id, user_id, risk_score, now, now),
+                )
+            else:
+                current_score = decayed_sentinel_score(
+                    float(profile["risk_score"]),
+                    profile["last_event_at"],
+                    now_iso=now,
+                )
+                risk_score = min(100.0, current_score + increment)
+                self.connection.execute(
+                    """
+                    UPDATE sentinel_profiles
+                    SET risk_score = ?,
+                        event_count = event_count + 1,
+                        last_event_at = ?,
+                        updated_at = ?
+                    WHERE guild_id = ? AND user_id = ?
+                    """,
+                    (risk_score, now, now, guild_id, user_id),
+                )
+            self.connection.commit()
+            return int(cursor.lastrowid)
+
+    def list_recent_sentinel_events(
+        self,
+        guild_id: int,
+        *,
+        limit: int = 10,
+        user_id: int | None = None,
+        min_severity: int | None = None,
+    ) -> list[dict[str, Any]]:
+        self.ensure_guild(guild_id)
+        query = ["SELECT * FROM sentinel_events WHERE guild_id = ?"]
+        values: list[Any] = [guild_id]
+        if user_id is not None:
+            query.append("AND user_id = ?")
+            values.append(user_id)
+        if min_severity is not None:
+            query.append("AND severity >= ?")
+            values.append(min_severity)
+        query.append("ORDER BY id DESC LIMIT ?")
+        values.append(max(1, min(50, int(limit))))
+        with self._lock:
+            rows = self.connection.execute(" ".join(query), tuple(values)).fetchall()
+        events: list[dict[str, Any]] = []
+        for row in rows:
+            event = dict(row)
+            event["signals"] = json.loads(event.pop("signals_json") or "[]")
+            events.append(event)
+        return events
+
+    def get_sentinel_profile(self, guild_id: int, user_id: int) -> dict[str, Any] | None:
+        self.ensure_guild(guild_id)
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT * FROM sentinel_profiles WHERE guild_id = ? AND user_id = ?",
+                (guild_id, user_id),
+            ).fetchone()
+        if row is None:
+            return None
+        profile = dict(row)
+        profile["risk_score"] = decayed_sentinel_score(
+            float(profile["risk_score"]),
+            profile["last_event_at"],
+        )
+        return profile
 
     def set_config_value(self, guild_id: int, column: str, value: Any) -> None:
         if column not in CONFIG_COLUMNS:

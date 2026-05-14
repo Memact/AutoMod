@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
+import time
+from datetime import datetime, timedelta
 
 import nextcord
 from nextcord.ext import commands
@@ -9,6 +10,7 @@ from nextcord.ext import commands
 from bot import MemactAutoModBot
 from config import ACTION_LOG_CHANNEL_ID, BOT_JOIN_ROLE_ID, COMMAND_GUILD_IDS, INTRO_CHANNEL_ID, MEMBER_JOIN_ROLE_ID, WELCOME_CHANNEL_ID
 from utils.checks import require_admin
+from utils.sentinel import SentinelDecision, evaluate_message
 from utils.ui import build_embed, send_interaction
 
 
@@ -31,6 +33,7 @@ class AutomodCog(commands.Cog):
     def __init__(self, bot: MemactAutoModBot) -> None:
         self.bot = bot
         self._native_sync_started = False
+        self._sentinel_alert_cooldowns: dict[tuple[int, int, str], float] = {}
 
     @commands.Cog.listener()
     async def on_ready(self) -> None:
@@ -149,6 +152,17 @@ class AutomodCog(commands.Cog):
             await self._upsert_rule(
                 guild,
                 existing,
+                name=f"{RULE_PREFIX}: Hate Speech",
+                trigger_type=nextcord.AutoModerationTriggerType.keyword_preset,
+                trigger_metadata=nextcord.AutoModerationTriggerMetadata(
+                    presets=[nextcord.KeywordPresetType.slurs],
+                ),
+                actions=self._actions(guild, "Discord blocked this because it looks like hate speech."),
+                enabled=enabled,
+            ),
+            await self._upsert_rule(
+                guild,
+                existing,
                 name=f"{RULE_PREFIX}: Scam Links",
                 trigger_type=nextcord.AutoModerationTriggerType.keyword,
                 trigger_metadata=nextcord.AutoModerationTriggerMetadata(keyword_filter=SCAM_LINK_PATTERNS),
@@ -215,12 +229,119 @@ class AutomodCog(commands.Cog):
         except (nextcord.Forbidden, nextcord.HTTPException):
             pass
 
+    def _age_hours(self, then: datetime | None) -> float:
+        if then is None:
+            return 0.0
+        return max(0.0, (nextcord.utils.utcnow() - then).total_seconds() / 3600)
+
+    def _sentinel_category(self, decision: SentinelDecision) -> str:
+        for signal in decision.signals:
+            if signal.category != "context":
+                return signal.category
+        return "context"
+
+    def _sentinel_signal_payload(self, decision: SentinelDecision) -> list[dict[str, object]]:
+        return [
+            {
+                "category": signal.category,
+                "label": signal.label,
+                "severity": signal.severity,
+                "confidence": round(signal.confidence, 3),
+            }
+            for signal in decision.signals
+        ]
+
+    def _should_send_sentinel_alert(
+        self,
+        guild_id: int,
+        user_id: int,
+        category: str,
+        *,
+        decision: SentinelDecision,
+        risk_score: float,
+    ) -> bool:
+        if not decision.should_alert and risk_score < 70:
+            return False
+        key = (guild_id, user_id, category)
+        now = time.monotonic()
+        if now - self._sentinel_alert_cooldowns.get(key, 0.0) < 180:
+            return False
+        self._sentinel_alert_cooldowns[key] = now
+        return True
+
+    async def _run_sentinel(self, message: nextcord.Message) -> None:
+        if message.guild is None or not message.content:
+            return
+        config = self.bot.db.get_guild_config(message.guild.id)
+        mention_count = len(message.mentions) + len(message.role_mentions)
+        if message.mention_everyone:
+            mention_count += 5
+        joined_at = getattr(message.author, "joined_at", None)
+        decision = evaluate_message(
+            content=message.content,
+            mention_count=mention_count,
+            account_age_hours=self._age_hours(message.author.created_at),
+            joined_age_hours=self._age_hours(joined_at),
+            raid_mode=bool(config["raid_mode"]),
+        )
+        if decision is None or decision.severity < 3:
+            return
+
+        category = self._sentinel_category(decision)
+        event_id = self.bot.db.add_sentinel_event(
+            message.guild.id,
+            message.author.id,
+            channel_id=message.channel.id,
+            message_id=message.id,
+            category=category,
+            severity=decision.severity,
+            confidence=decision.confidence,
+            summary=decision.summary,
+            content_hash=decision.content_hash,
+            excerpt=decision.excerpt,
+            signals=self._sentinel_signal_payload(decision),
+        )
+        profile = self.bot.db.get_sentinel_profile(message.guild.id, message.author.id) or {}
+        risk_score = float(profile.get("risk_score", 0.0))
+        if not self._should_send_sentinel_alert(
+            message.guild.id,
+            message.author.id,
+            category,
+            decision=decision,
+            risk_score=risk_score,
+        ):
+            return
+
+        signal_lines = [
+            f"{signal.label} ({signal.category}, s{signal.severity}, {signal.confidence:.0%})"
+            for signal in decision.signals
+            if signal.category != "context"
+        ]
+        fields = [
+            ("Event", f"`#{event_id}`", True),
+            ("Member", f"{message.author.mention} (`{message.author.id}`)", False),
+            ("Channel", message.channel.mention, True),
+            ("Severity", f"{decision.severity}/5", True),
+            ("Confidence", f"{decision.confidence:.0%}", True),
+            ("Risk Score", f"{risk_score:.1f}/100", True),
+            ("Signals", "\n".join(signal_lines) or decision.summary, False),
+            ("Excerpt", decision.excerpt or "-", False),
+            ("Jump", message.jump_url, False),
+        ]
+        await self.bot.send_log(
+            message.guild,
+            title="Sentinel Alert",
+            description="Silent moderation intelligence flagged this message for staff review. No automatic punishment was applied.",
+            fields=fields,
+        )
+
     @commands.Cog.listener()
     async def on_message(self, message: nextcord.Message) -> None:
         if message.guild is None or message.author.bot:
             return
         if not self.bot.is_allowed_guild_id(message.guild.id):
             return
+        await self._run_sentinel(message)
         if message.channel.id == INTRO_CHANNEL_ID:
             await self._acknowledge_intro_message(message)
 
@@ -307,7 +428,12 @@ class AutomodCog(commands.Cog):
         except (nextcord.Forbidden, nextcord.HTTPException):
             rules = {}
         lines = []
-        for name in (f"{RULE_PREFIX}: Spam", f"{RULE_PREFIX}: Mention Raid", f"{RULE_PREFIX}: Scam Links"):
+        for name in (
+            f"{RULE_PREFIX}: Spam",
+            f"{RULE_PREFIX}: Mention Raid",
+            f"{RULE_PREFIX}: Hate Speech",
+            f"{RULE_PREFIX}: Scam Links",
+        ):
             rule = rules.get(name)
             if rule is None:
                 lines.append(f"`{name}`: missing")
@@ -320,7 +446,7 @@ class AutomodCog(commands.Cog):
                 "Native Discord AutoMod is the primary chat protection layer. The bot no longer warns people for ordinary profanity or casual keywords.",
                 fields=[
                     ("Master Switch", "On" if config["automod_enabled"] else "Off", True),
-                    ("Backend", "Discord AutoMod + Memact staff workflow", False),
+                    ("Backend", "Discord AutoMod + silent Sentinel intelligence + Memact staff workflow", False),
                     ("Rules", "\n".join(lines) if lines else "No Memact Guard rules found.", False),
                 ],
             ),
