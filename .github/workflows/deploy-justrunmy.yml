@@ -23,9 +23,23 @@ jobs:
           username: ${{ secrets.JUSTRUNMY_REGISTRY_USERNAME }}
           password: ${{ secrets.JUSTRUNMY_REGISTRY_PASSWORD }}
 
+      - name: Resolve v2 image tag
+        id: image
+        shell: bash
+        run: |
+          image="${{ secrets.JUSTRUNMY_IMAGE }}"
+          if [ -z "$image" ]; then
+            echo "JUSTRUNMY_IMAGE secret is missing"
+            exit 1
+          fi
+          image="${image//v1_autodeploy/v2_autodeploy}"
+          image="${image/:v1_/:v2_}"
+          image="${image/%:v1/:v2}"
+          echo "tag=$image" >> "$GITHUB_OUTPUT"
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ${{ secrets.JUSTRUNMY_IMAGE }}
+          tags: ${{ steps.image.outputs.tag }}

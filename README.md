@@ -18,8 +18,8 @@ community operations:
 - Discord-native AutoMod protection for spam, mention raids, hate-speech
   presets, and scam-link patterns backed by Memact's local deletion guard
 - Memact local deletion guard for strong profanity, offensive extremist or
-  dictator references, unsolicited invites, promo links, bot/app spam, and
-  repeated message bursts
+  dictator references, untrusted external links, unsolicited invites, promo
+  links, bot/app spam, and repeated message bursts
 - silent Sentinel intelligence for raids, scams, harassment, hate-speech
   patterns, and rolling member risk review
 - security guardrails for anti-nuke detection, audit logging, and SQLite
@@ -44,8 +44,9 @@ This repository's source code is open source under the MIT license. See
 - native Discord AutoMod rules for spam, mention raids, hate-speech presets,
   and known scam-link patterns
 - local Memact Guard deletion for strong profanity, offensive extremist or
-  dictator references, suspicious promos, unsolicited invites, and repeated
-  spam, including messages from installed bots/apps and webhooks
+  dictator references, untrusted external links, suspicious promos,
+  unsolicited invites, URL shorteners, and repeated spam, including messages
+  from installed bots/apps and webhooks
 - silent Sentinel detection for protected-class hate patterns, self-harm
   harassment, scam links, homoglyph domains, misleading markdown links,
   new-account bursts, and mention raids
@@ -122,6 +123,9 @@ In practice:
 - Memact's local guard deletes public strong-profanity and offensive-reference
   messages while intentionally allowing short casual terms such as `wth` and
   `wtf`
+- public links use an allowlist-first posture: known safe hosts stay normal,
+  while unknown external links, shorteners, suspicious TLDs, invite spam, and
+  random-looking hosts are treated as spam-risk and logged
 - installed bots/apps and webhooks are moderated too, so compromised or spammy
   integrations cannot freely post abusive text, invite links, or promo scams
 - staff-only channels are treated with lighter friction for human moderators,

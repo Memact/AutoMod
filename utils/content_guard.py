@@ -29,6 +29,54 @@ PROMO_LINK_RE = re.compile(
     re.IGNORECASE,
 )
 
+URL_SHORTENER_HOSTS = {
+    "bit.ly",
+    "cutt.ly",
+    "goo.gl",
+    "is.gd",
+    "ow.ly",
+    "rebrand.ly",
+    "shorturl.at",
+    "tiny.cc",
+    "tinyurl.com",
+    "t.ly",
+}
+
+SUSPICIOUS_TLDS = {
+    "cam",
+    "click",
+    "cyou",
+    "icu",
+    "lol",
+    "monster",
+    "mov",
+    "quest",
+    "rest",
+    "sbs",
+    "shop",
+    "site",
+    "top",
+    "work",
+    "xyz",
+    "zip",
+}
+
+SUSPICIOUS_HOST_TOKENS = (
+    "airdrop",
+    "bonus",
+    "claim",
+    "free",
+    "gift",
+    "giveaway",
+    "login",
+    "nitro",
+    "promo",
+    "reward",
+    "steam",
+    "verify",
+    "wallet",
+)
+
 
 def _letter_pattern(word: str) -> str:
     pieces = []
@@ -136,18 +184,54 @@ def _contains_offensive_reference(normalized: str) -> bool:
     return any(pattern.search(normalized) for pattern in OFFENSIVE_REFERENCE_PATTERNS)
 
 
-def _scam_and_link_signals(content: str, normalized: str, *, is_bot_actor: bool) -> list[SentinelSignal]:
+def _host_tld(host: str) -> str:
+    parts = host.rsplit(".", 1)
+    return parts[1] if len(parts) == 2 else ""
+
+
+def _looks_random_host(host: str) -> bool:
+    label = host.split(".", 1)[0]
+    if len(label) < 16:
+        return False
+    digit_count = sum(char.isdigit() for char in label)
+    vowel_count = sum(char in "aeiou" for char in label)
+    return digit_count >= 4 or vowel_count <= max(1, len(label) // 8)
+
+
+def _scam_and_link_signals(
+    content: str,
+    normalized: str,
+    *,
+    is_bot_actor: bool,
+    account_age_hours: float,
+    joined_age_hours: float,
+    staff_only_channel: bool,
+    is_staff_actor: bool,
+) -> list[SentinelSignal]:
     signals: list[SentinelSignal] = []
     urls = extract_urls(content)
-    if not urls:
-        return signals
-
     hosts = [normalized_host(url) for url in urls]
     unsafe_hosts = [host for host in hosts if not is_known_safe_host(host)]
+    if len(urls) >= 3:
+        signals.append(SentinelSignal("spam_link", "multiple links in one message", 4 if is_bot_actor else 3, 0.84))
     if unsafe_hosts and any(token in normalized for token in SCAM_TOKENS):
         signals.append(SentinelSignal("scam", "suspicious link plus scam language", 5, 0.93))
     if any(looks_like_homoglyph_domain(host) for host in unsafe_hosts):
         signals.append(SentinelSignal("scam", "lookalike or obfuscated domain", 4, 0.86))
+    if unsafe_hosts and is_bot_actor:
+        signals.append(SentinelSignal("spam_link", "bot/app posted untrusted external link", 4, 0.9))
+    if unsafe_hosts and not staff_only_channel:
+        signals.append(SentinelSignal("spam_link", "untrusted external link in public channel", 2, 0.74))
+    if unsafe_hosts and (account_age_hours < 168 or joined_age_hours < 72):
+        signals.append(SentinelSignal("spam_link", "new account/member posted untrusted link", 4, 0.86))
+    if any(host in URL_SHORTENER_HOSTS for host in unsafe_hosts):
+        signals.append(SentinelSignal("spam_link", "URL shortener or redirector", 4, 0.84))
+    if any(_host_tld(host) in SUSPICIOUS_TLDS for host in unsafe_hosts):
+        signals.append(SentinelSignal("spam_link", "suspicious link TLD", 3, 0.78))
+    if any(token in host for host in unsafe_hosts for token in SUSPICIOUS_HOST_TOKENS):
+        signals.append(SentinelSignal("scam", "suspicious keyword in link host", 4, 0.85))
+    if any(_looks_random_host(host) for host in unsafe_hosts):
+        signals.append(SentinelSignal("spam_link", "random-looking link host", 3, 0.74))
     for label, url in MARKDOWN_LINK_RE.findall(content):
         label_hosts = [normalized_host(label_url) for label_url in URL_RE.findall(label)]
         target_host = normalized_host(url)
@@ -167,6 +251,13 @@ def _scam_and_link_signals(content: str, normalized: str, *, is_bot_actor: bool)
         confidence = 0.9 if is_bot_actor else 0.76
         severity = 4 if is_bot_actor else 3
         signals.append(SentinelSignal("promo", "promotional link pattern", severity, confidence))
+
+    if staff_only_channel and is_staff_actor:
+        signals = [
+            signal
+            for signal in signals
+            if signal.category in {"scam", "hate_speech", "harassment"} or signal.severity >= 4
+        ]
 
     return signals
 
@@ -206,7 +297,15 @@ def evaluate_guard_message(
     if _contains_offensive_reference(normalized):
         signals.append(SentinelSignal("offensive_reference", "dictator or extremist reference", 3, 0.86))
 
-    for signal in _scam_and_link_signals(content, normalized, is_bot_actor=is_bot_actor):
+    for signal in _scam_and_link_signals(
+        content,
+        normalized,
+        is_bot_actor=is_bot_actor,
+        account_age_hours=account_age_hours,
+        joined_age_hours=joined_age_hours,
+        staff_only_channel=staff_only_channel,
+        is_staff_actor=is_staff_actor,
+    ):
         _append_unique(signals, signal)
 
     if recent_message_count >= (3 if is_bot_actor else 6):
@@ -226,7 +325,7 @@ def evaluate_guard_message(
     confidence = min(0.99, sum(signal.confidence for signal in signals) / len(signals) + (0.04 if len(signals) >= 2 else 0.0))
     category = _category(signals)
 
-    if staff_only_channel and is_staff_actor and category in {"profanity", "offensive_reference", "promo", "spam"} and severity < 4:
+    if staff_only_channel and is_staff_actor and category in {"profanity", "offensive_reference", "promo", "spam", "spam_link"} and severity < 4:
         return None
 
     action = "delete" if severity >= (4 if staff_only_channel and is_staff_actor else 2) else "observe"
