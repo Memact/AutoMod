@@ -13,14 +13,12 @@ This repository is focused on running a practical all-in-one server bot rather
 than a single-feature integration. The core of the bot is moderation and
 community operations:
 
-- slash-command moderation for bans, kicks, timeouts, warnings, purge, locks,
-  slowmode, nicknames, and role tools
-- context-aware automod protections for spam, duplicate messages, suspicious
-  links, invite abuse, blocked words, mention flooding, and raid-mode responses
+- compact `/staff` moderation console for bans, kicks, timeouts, warnings,
+  purge, locks, slowmode, case history, and raid cleanup
+- Discord-native AutoMod protection for spam, mention raids, and scam-link
+  patterns without bot-side profanity policing
 - security guardrails for anti-nuke detection, audit logging, and SQLite
   backups
-- startup seeding for bundled and curated automod datasets after deploys or
-  restarts
 - SQLite-backed case history, warning points, scheduled actions, queue entries,
   and server configuration
 - rules posting, reusable embed templates, and staff-facing logging
@@ -34,12 +32,12 @@ This repository's source code is open source under the MIT license. See
 
 ## Features
 
-- moderation slash commands for bans, kicks, timeouts, warnings, purge, locks,
-  slowmode, nicknames, and role tools
+- compact `/staff` slash commands for bans, kicks, timeouts, warnings, purge,
+  locks, slowmode, case history, and raid cleanup
 - SQLite-backed case history, warning points, temp-ban scheduling, and server
   config
-- scoring-based automod for spam, duplicate messages, suspicious links, invite
-  abuse, blocked words, caps context, and mention flooding
+- native Discord AutoMod rules for spam, mention raids, and known scam-link
+  patterns
 - anti-nuke protection for destructive server bursts such as mass bans, kicks,
   channel deletes, and role deletes
 - richer audit logging for message edits/deletes, role changes, channel
@@ -61,8 +59,8 @@ This repository's source code is open source under the MIT license. See
 4. Copy `.env.example` to `.env` and fill in `MEMACT_TOKEN`.
 5. Install dependencies with `pip install -r requirements.txt`.
 6. Run the bot with `python main.py`.
-7. Optional: set `MEMACT_STREAM_TITLE` and `MEMACT_STREAM_URL` to control the
-   streaming presence. Default title is `Moderating this server`.
+7. Run `/automod install` once in Discord to create or refresh the native
+   Memact Guard rules.
 
 ## Bluesky Relay
 
@@ -96,33 +94,32 @@ credentials are required for read-only mirroring.
 
 ## Moderation Model
 
-Memact AutoMod uses a conservative scoring model instead of warning members for
-every single keyword or formatting trigger. The bot weighs message context,
-member trust, account age, join age, links, mentions, repeated behavior, and
-raid mode before deciding what to do.
+Memact AutoMod now uses a native-first moderation model. Discord's own AutoMod
+handles the raw message protection layer, while the bot focuses on staff
+workflow, cases, appeals, audit logs, anti-raid behavior, and backups.
 
 In practice:
 
-- all-caps text alone does not create warning points
-- GIFs and normal media-only messages are ignored by automod
-- words such as casino, sale, promo, or giveaway are not punished by themselves
-- invite links and promotional links are usually deleted/logged first, not
-  instantly converted into warning points
-- repeated soft violations can become a warning if the same member keeps doing
-  it in a short window
-- scam-link patterns, message floods, repeated spam, and mass mentions still
-  trigger stronger actions
+- the bot does not warn members for ordinary profanity or casual keywords
+- GIFs, all-caps messages, memes, and normal chat are not judged by a custom
+  keyword engine
+- native Discord AutoMod blocks spam, mention raids, and known scam-link
+  patterns before they become moderation cases
+- manual warnings are staff decisions through `/staff warn`
+- warning revokes are member-friendly through `/staff unwarn_latest`
+- appeals work with or without a case ID
 
 Useful staff commands:
 
-- `/automod view`: show current automod mode and thresholds
-- `/automod toggle`: enable or disable specific filters
-- `/mod warnings`: show a member's active warning points and active warning
+- `/automod install`: create or refresh native Discord AutoMod rules
+- `/automod view`: show Memact Guard native-rule status
+- `/automod toggle`: enable or disable Memact Guard
+- `/automod mention_limit`: tune native mention-raid protection
+- `/staff warnings`: show a member's active warning points and active warning
   cases
-- `/mod unwarn_latest`: revoke the latest active warning for a member without
+- `/staff unwarn_latest`: revoke the latest active warning for a member without
   hunting for a case ID
-- `/mod unwarn`: revoke a specific warning when staff already know the case ID
-- `/mod clearwarns`: clear all active warnings for a member
+- `/staff clearwarns`: clear all active warnings for a member
 - `/appeal reason:<text>`: appeal the user's latest active moderation case
 - `/appeal reason:<text> case_id:<id>`: appeal a specific case
 
@@ -152,13 +149,13 @@ Recommended settings:
    - `MEMACT_GUILD_ID` (optional but recommended if this bot should stay locked
      to one server)
    - `MEMACT_DATABASE`
-   - `MEMACT_STREAM_TITLE` (optional)
-   - `MEMACT_STREAM_URL` (optional but required for streaming presence)
    - `MEMACT_BACKUP_DIR` (optional, recommended on persistent storage)
    - `MEMACT_BACKUP_INTERVAL_HOURS` (optional, default `12`)
    - `MEMACT_BACKUP_RETENTION` (optional, default `14`)
 6. Start the app and watch the JustRunMy.App logs until the bot prints that it
    logged in and synced commands.
+7. Run `/automod install` after the bot is online if Discord native AutoMod
+   rules have not been created yet.
 
 Important JustRunMy.App notes:
 

@@ -23,6 +23,7 @@ class MemactAutoModBot(commands.Bot):
         intents.message_content = True
         intents.guild_messages = True
         intents.bans = True
+        intents.auto_moderation = True
 
         super().__init__(
             command_prefix=commands.when_mentioned,
@@ -39,7 +40,7 @@ class MemactAutoModBot(commands.Bot):
         self._commands_synced = False
         self.add_application_command_check(self._allowed_guild_check)
         for extension in (
-            "cogs.moderation",
+            "cogs.staff",
             "cogs.configuration",
             "cogs.automod",
             "cogs.safety",
@@ -70,12 +71,7 @@ class MemactAutoModBot(commands.Bot):
             if self.keepalive_state is not None:
                 self.keepalive_state.set_status("ready", f"Connected as {self.user}.")
         try:
-            await self.change_presence(
-                activity=nextcord.Streaming(
-                    name=self.settings.stream_title,
-                    url=self.settings.stream_url,
-                )
-            )
+            await self.change_presence(status=nextcord.Status.online, activity=None)
         except Exception as error:
             print(f"Failed to set streaming presence: {type(error).__name__}: {error}")
         print(f"Loaded {local_command_count} local application command groups.")
