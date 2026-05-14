@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 from dataclasses import dataclass
 import re
 
@@ -88,14 +89,22 @@ def _letter_pattern(word: str) -> str:
             piece = r"[a@4]+"
         elif char == "e":
             piece = r"[e3]+"
+        elif char == "g":
+            piece = r"[g9q]+"
         elif char == "i":
             piece = r"[i1!|]+"
+        elif char == "l":
+            piece = r"[l1!|]+"
         elif char == "o":
             piece = r"[o0]+"
+        elif char == "b":
+            piece = r"[b8]+"
         elif char == "s":
             piece = r"[s$5]+"
         elif char == "t":
             piece = r"[t7]+"
+        elif char == "z":
+            piece = r"[z2]+"
         else:
             piece = re.escape(char) + "+"
         pieces.append(piece)
@@ -134,6 +143,32 @@ OFFENSIVE_REFERENCES = (
     "osama bin laden",
 )
 
+# Encoded so source/docs do not render slurs while still keeping the detector local and deterministic.
+PROTECTED_CLASS_SLURS_ROT13 = (
+    "avttre",
+    "avttn",
+    "snttbg",
+    "snt",
+    "xvxr",
+    "puvax",
+    "tbbx",
+    "fcvp",
+    "jrgonpx",
+    "ornare",
+    "erqfxva",
+    "ergneq",
+    "ergneqrq",
+    "genaal",
+    "qlxr",
+    "furznyr",
+    "pbba",
+    "gbjryurnq",
+    "enturnq",
+    "mvccreurnq",
+    "cbepu zbaxrl",
+    "zbatbybvq",
+)
+
 PROFANITY_PATTERNS = tuple(
     re.compile(rf"(?<![a-z0-9]){_letter_pattern(term)}(?:s|ed|ing|er|ers)?(?![a-z0-9])", re.IGNORECASE)
     for term in BLOCKED_PROFANITY
@@ -141,6 +176,13 @@ PROFANITY_PATTERNS = tuple(
 OFFENSIVE_REFERENCE_PATTERNS = tuple(
     re.compile(rf"(?<![a-z0-9]){_letter_pattern(term)}(?![a-z0-9])", re.IGNORECASE)
     for term in OFFENSIVE_REFERENCES
+)
+PROTECTED_CLASS_SLUR_PATTERNS = tuple(
+    re.compile(
+        rf"(?<![a-z0-9]){_letter_pattern(codecs.decode(term, 'rot_13'))}(?:s|ed|ing|er|ers)?(?![a-z0-9])",
+        re.IGNORECASE,
+    )
+    for term in PROTECTED_CLASS_SLURS_ROT13
 )
 
 
@@ -182,6 +224,10 @@ def _contains_blocked_profanity(normalized: str) -> bool:
 
 def _contains_offensive_reference(normalized: str) -> bool:
     return any(pattern.search(normalized) for pattern in OFFENSIVE_REFERENCE_PATTERNS)
+
+
+def _contains_protected_class_slur(normalized: str) -> bool:
+    return any(pattern.search(normalized) for pattern in PROTECTED_CLASS_SLUR_PATTERNS)
 
 
 def _host_tld(host: str) -> str:
@@ -290,6 +336,9 @@ def evaluate_guard_message(
     if silent_decision is not None:
         for signal in silent_decision.signals:
             _append_unique(signals, signal)
+
+    if _contains_protected_class_slur(normalized):
+        signals.append(SentinelSignal("hate_speech", "protected-class slur", 5, 0.97))
 
     if _contains_blocked_profanity(normalized):
         signals.append(SentinelSignal("profanity", "blocked profanity", 2, 0.92))

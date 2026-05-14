@@ -44,9 +44,9 @@ This repository's source code is open source under the MIT license. See
 - native Discord AutoMod rules for spam, mention raids, hate-speech presets,
   and known scam-link patterns
 - local Memact Guard deletion for strong profanity, offensive extremist or
-  dictator references, untrusted external links, suspicious promos,
-  unsolicited invites, URL shorteners, and repeated spam, including messages
-  from installed bots/apps and webhooks
+  dictator references, protected-class slurs, untrusted external links,
+  suspicious promos, unsolicited invites, URL shorteners, and repeated spam,
+  including messages from installed bots/apps and webhooks
 - silent Sentinel detection for protected-class hate patterns, self-harm
   harassment, scam links, homoglyph domains, misleading markdown links,
   new-account bursts, and mention raids
@@ -123,6 +123,8 @@ In practice:
 - Memact's local guard deletes public strong-profanity and offensive-reference
   messages while intentionally allowing short casual terms such as `wth` and
   `wtf`
+- protected-class slurs are hard-blocked locally with punctuation and leetspeak
+  variants, so targeted racism does not depend only on Discord's native preset
 - public links use an allowlist-first posture: known safe hosts stay normal,
   while unknown external links, shorteners, suspicious TLDs, invite spam, and
   random-looking hosts are treated as spam-risk and logged
