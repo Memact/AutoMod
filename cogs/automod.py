@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import defaultdict, deque
 import time
 from datetime import datetime, timedelta
 
@@ -9,8 +10,9 @@ from nextcord.ext import commands
 
 from bot import MemactAutoModBot
 from config import ACTION_LOG_CHANNEL_ID, BOT_JOIN_ROLE_ID, COMMAND_GUILD_IDS, INTRO_CHANNEL_ID, MEMBER_JOIN_ROLE_ID, WELCOME_CHANNEL_ID
-from utils.checks import require_admin
-from utils.sentinel import SentinelDecision, evaluate_message
+from utils.checks import is_moderator_member, require_admin
+from utils.content_guard import GuardDecision, evaluate_guard_message
+from utils.sentinel import SentinelDecision, content_hash, evaluate_message
 from utils.ui import build_embed, send_interaction
 
 
@@ -34,6 +36,8 @@ class AutomodCog(commands.Cog):
         self.bot = bot
         self._native_sync_started = False
         self._sentinel_alert_cooldowns: dict[tuple[int, int, str], float] = {}
+        self._message_windows: dict[tuple[int, int], deque[float]] = defaultdict(deque)
+        self._content_windows: dict[tuple[int, int], deque[tuple[float, str]]] = defaultdict(deque)
 
     @commands.Cog.listener()
     async def on_ready(self) -> None:
@@ -98,6 +102,7 @@ class AutomodCog(commands.Cog):
         trigger_type: nextcord.AutoModerationTriggerType,
         actions: list[nextcord.AutoModerationAction],
         trigger_metadata: nextcord.AutoModerationTriggerMetadata | None = None,
+        exempt_roles: list[nextcord.Object] | None = None,
         enabled: bool,
     ) -> nextcord.AutoModerationRule:
         rule = existing.get(name)
@@ -112,6 +117,8 @@ class AutomodCog(commands.Cog):
             }
             if trigger_metadata is not None:
                 create_kwargs["trigger_metadata"] = trigger_metadata
+            if exempt_roles is not None:
+                create_kwargs["exempt_roles"] = exempt_roles
             return await guild.create_auto_moderation_rule(**create_kwargs)
         edit_kwargs = {
             "name": name,
@@ -122,12 +129,18 @@ class AutomodCog(commands.Cog):
         }
         if trigger_metadata is not None:
             edit_kwargs["trigger_metadata"] = trigger_metadata
+        if exempt_roles is not None:
+            edit_kwargs["exempt_roles"] = exempt_roles
         return await rule.edit(**edit_kwargs)
 
     async def _ensure_native_rules(self, guild: nextcord.Guild, *, enabled: bool) -> list[nextcord.AutoModerationRule]:
         existing = await self._existing_memact_rules(guild)
         config = self.bot.db.get_guild_config(guild.id)
         mention_limit = max(5, int(config["mention_threshold"]))
+        exempt_roles = [
+            nextcord.Object(id=role_id)
+            for role_id in [*config["admin_role_ids"], *config["mod_role_ids"]]
+        ][:20]
         rules = [
             await self._upsert_rule(
                 guild,
@@ -135,6 +148,7 @@ class AutomodCog(commands.Cog):
                 name=f"{RULE_PREFIX}: Spam",
                 trigger_type=nextcord.AutoModerationTriggerType.spam,
                 actions=self._actions(guild, "Discord blocked this as spam."),
+                exempt_roles=exempt_roles,
                 enabled=enabled,
             ),
             await self._upsert_rule(
@@ -147,6 +161,7 @@ class AutomodCog(commands.Cog):
                     mention_raid_protection_enabled=True,
                 ),
                 actions=self._actions(guild, "Discord blocked this because it mentioned too many people."),
+                exempt_roles=exempt_roles,
                 enabled=enabled,
             ),
             await self._upsert_rule(
@@ -158,6 +173,7 @@ class AutomodCog(commands.Cog):
                     presets=[nextcord.KeywordPresetType.slurs],
                 ),
                 actions=self._actions(guild, "Discord blocked this because it looks like hate speech."),
+                exempt_roles=exempt_roles,
                 enabled=enabled,
             ),
             await self._upsert_rule(
@@ -167,6 +183,7 @@ class AutomodCog(commands.Cog):
                 trigger_type=nextcord.AutoModerationTriggerType.keyword,
                 trigger_metadata=nextcord.AutoModerationTriggerMetadata(keyword_filter=SCAM_LINK_PATTERNS),
                 actions=self._actions(guild, "Discord blocked this because it looks like a scam link."),
+                exempt_roles=exempt_roles,
                 enabled=enabled,
             ),
         ]
@@ -181,9 +198,36 @@ class AutomodCog(commands.Cog):
         return changed
 
     def _build_welcome_embed(self, member: nextcord.Member) -> nextcord.Embed:
+        member_count = member.guild.member_count or len(member.guild.members)
+        display_name = member.display_name.strip() or member.name
+        age_days = max(0, int((nextcord.utils.utcnow() - member.created_at).total_seconds() // 86400))
+        templates = (
+            (
+                f"Welcome in, {display_name}",
+                f"You are member #{member_count}. Start with a quick intro in <#{INTRO_CHANNEL_ID}> so the server can place the name with the person.",
+            ),
+            (
+                f"{display_name} joined Memact",
+                f"Fresh arrival logged. Drop a short intro in <#{INTRO_CHANNEL_ID}> and make yourself easy to welcome.",
+            ),
+            (
+                f"Good to have you, {display_name}",
+                f"Your Discord account is about {age_days} day(s) old. When you are ready, say hi in <#{INTRO_CHANNEL_ID}>.",
+            ),
+            (
+                f"New member: {display_name}",
+                f"Settle in, read the rules, and post a small intro in <#{INTRO_CHANNEL_ID}> when you get a moment.",
+            ),
+        )
+        title, description = templates[member.id % len(templates)]
         return build_embed(
-            f"Welcome to {member.guild.name}",
-            f"Please post your intro in the channel <#{INTRO_CHANNEL_ID}> so everyone can get to know you.",
+            title,
+            description,
+            fields=[
+                ("Server", member.guild.name, True),
+                ("Member Count", str(member_count), True),
+                ("Intro Channel", f"<#{INTRO_CHANNEL_ID}>", True),
+            ],
         )
 
     async def _assign_join_role(self, member: nextcord.Member, role_id: int) -> bool:
@@ -234,6 +278,100 @@ class AutomodCog(commands.Cog):
             return 0.0
         return max(0.0, (nextcord.utils.utcnow() - then).total_seconds() / 3600)
 
+    def _is_staff_actor(self, message: nextcord.Message, config: dict) -> bool:
+        if not isinstance(message.author, nextcord.Member) or message.author.bot:
+            return False
+        return is_moderator_member(message.author, config)
+
+    def _is_staff_only_channel(self, message: nextcord.Message, config: dict) -> bool:
+        guild = message.guild
+        if guild is None:
+            return False
+        channel = getattr(message.channel, "parent", None) or message.channel
+        permissions_for = getattr(channel, "permissions_for", None)
+        if not callable(permissions_for):
+            return False
+        if permissions_for(guild.default_role).view_channel:
+            return False
+        staff_role_ids = set(config["admin_role_ids"]) | set(config["mod_role_ids"])
+        if not staff_role_ids:
+            return True
+        for role_id in staff_role_ids:
+            role = guild.get_role(role_id)
+            if role is not None and permissions_for(role).view_channel:
+                return True
+        return True
+
+    def _actor_kind(self, message: nextcord.Message) -> str:
+        if message.webhook_id is not None:
+            return "webhook"
+        if message.author.bot:
+            return "bot_app"
+        return "human"
+
+    def _message_stats(self, message: nextcord.Message) -> tuple[int, int]:
+        key = (message.guild.id, message.author.id)
+        now = time.monotonic()
+        message_window = self._message_windows[key]
+        content_window = self._content_windows[key]
+        while message_window and now - message_window[0] > 8:
+            message_window.popleft()
+        while content_window and now - content_window[0][0] > 90:
+            content_window.popleft()
+        digest = content_hash(message.content)
+        message_window.append(now)
+        content_window.append((now, digest))
+        duplicate_count = sum(1 for _, item_hash in content_window if item_hash == digest)
+        return len(message_window), duplicate_count
+
+    def _guard_signal_payload(self, decision: GuardDecision) -> list[dict[str, object]]:
+        return [
+            {
+                "category": signal.category,
+                "label": signal.label,
+                "severity": signal.severity,
+                "confidence": round(signal.confidence, 3),
+            }
+            for signal in decision.signals
+        ]
+
+    async def _log_guard_action(
+        self,
+        message: nextcord.Message,
+        decision: GuardDecision,
+        *,
+        event_id: int,
+        deleted: bool,
+        deletion_error: str | None,
+        staff_only_channel: bool,
+    ) -> None:
+        signal_lines = [
+            f"{signal.label} ({signal.category}, s{signal.severity}, {signal.confidence:.0%})"
+            for signal in decision.signals
+            if signal.category != "context"
+        ]
+        fields = [
+            ("Event", f"`#{event_id}`", True),
+            ("Action", "Deleted" if deleted else "Delete failed", True),
+            ("Actor Type", self._actor_kind(message), True),
+            ("Member/App", f"{message.author.mention} (`{message.author.id}`)", False),
+            ("Channel", message.channel.mention, True),
+            ("Scope", "Staff-only" if staff_only_channel else "Public", True),
+            ("Category", decision.category, True),
+            ("Severity", f"{decision.severity}/5", True),
+            ("Confidence", f"{decision.confidence:.0%}", True),
+            ("Signals", "\n".join(signal_lines) or decision.summary, False),
+            ("Excerpt", decision.excerpt or "-", False),
+        ]
+        if deletion_error is not None:
+            fields.append(("Error", deletion_error, False))
+        await self.bot.send_log(
+            message.guild,
+            title="Memact Guard Action",
+            description="A message matched Memact's local moderation guard. Every local action is logged here for staff review.",
+            fields=fields,
+        )
+
     def _sentinel_category(self, decision: SentinelDecision) -> str:
         for signal in decision.signals:
             if signal.category != "context":
@@ -268,6 +406,67 @@ class AutomodCog(commands.Cog):
             return False
         self._sentinel_alert_cooldowns[key] = now
         return True
+
+    async def _run_guard(self, message: nextcord.Message, config: dict) -> bool:
+        if message.guild is None or not message.content:
+            return False
+        recent_message_count, duplicate_message_count = self._message_stats(message)
+        mention_count = len(message.mentions) + len(message.role_mentions)
+        if message.mention_everyone:
+            mention_count += 5
+        joined_at = getattr(message.author, "joined_at", None)
+        staff_only_channel = self._is_staff_only_channel(message, config)
+        decision = evaluate_guard_message(
+            content=message.content,
+            mention_count=mention_count,
+            account_age_hours=self._age_hours(message.author.created_at),
+            joined_age_hours=self._age_hours(joined_at),
+            raid_mode=bool(config["raid_mode"]),
+            is_bot_actor=message.author.bot or message.webhook_id is not None,
+            is_staff_actor=self._is_staff_actor(message, config),
+            staff_only_channel=staff_only_channel,
+            recent_message_count=recent_message_count,
+            duplicate_message_count=duplicate_message_count,
+        )
+        if decision is None:
+            return False
+
+        deleted = False
+        deletion_error: str | None = None
+        if decision.should_delete:
+            try:
+                await message.delete()
+                deleted = True
+            except (nextcord.Forbidden, nextcord.HTTPException) as error:
+                deletion_error = f"{type(error).__name__}: {error}"
+
+        event_id = self.bot.db.add_sentinel_event(
+            message.guild.id,
+            message.author.id,
+            channel_id=message.channel.id,
+            message_id=message.id,
+            category=decision.category,
+            severity=decision.severity,
+            confidence=decision.confidence,
+            summary=decision.summary,
+            content_hash=decision.content_hash,
+            excerpt=decision.excerpt,
+            signals=self._guard_signal_payload(decision),
+            action=decision.action,
+            actor_kind=self._actor_kind(message),
+            channel_scope="staff_only" if staff_only_channel else "public",
+            deleted=deleted,
+        )
+        if decision.should_delete:
+            await self._log_guard_action(
+                message,
+                decision,
+                event_id=event_id,
+                deleted=deleted,
+                deletion_error=deletion_error,
+                staff_only_channel=staff_only_channel,
+            )
+        return deleted
 
     async def _run_sentinel(self, message: nextcord.Message) -> None:
         if message.guild is None or not message.content:
@@ -337,12 +536,19 @@ class AutomodCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: nextcord.Message) -> None:
-        if message.guild is None or message.author.bot:
+        if message.guild is None:
             return
         if not self.bot.is_allowed_guild_id(message.guild.id):
             return
-        await self._run_sentinel(message)
-        if message.channel.id == INTRO_CHANNEL_ID:
+        if self.bot.user is not None and message.author.id == self.bot.user.id:
+            return
+        config = self.bot.db.get_guild_config(message.guild.id)
+        deleted = False
+        if config["automod_enabled"]:
+            deleted = await self._run_guard(message, config)
+        if not deleted:
+            await self._run_sentinel(message)
+        if not message.author.bot and not deleted and message.channel.id == INTRO_CHANNEL_ID:
             await self._acknowledge_intro_message(message)
 
     @commands.Cog.listener()
@@ -443,10 +649,10 @@ class AutomodCog(commands.Cog):
             interaction,
             embed=build_embed(
                 "Memact Guard",
-                "Native Discord AutoMod is the primary chat protection layer. The bot no longer warns people for ordinary profanity or casual keywords.",
+                "Native Discord AutoMod handles platform hard-blocks, while Memact Guard deletes logged local violations such as strong profanity, scam/promo links, bot/app spam, and extremist references.",
                 fields=[
                     ("Master Switch", "On" if config["automod_enabled"] else "Off", True),
-                    ("Backend", "Discord AutoMod + silent Sentinel intelligence + Memact staff workflow", False),
+                    ("Backend", "Discord AutoMod + local deletion guard + silent Sentinel intelligence + Memact staff workflow", False),
                     ("Rules", "\n".join(lines) if lines else "No Memact Guard rules found.", False),
                 ],
             ),

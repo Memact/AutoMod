@@ -32,12 +32,13 @@ ABUSE_STRIKE_THRESHOLD = 3
 ABUSE_TIMEOUT_MINUTES = 60
 
 DEFAULT_RULES = [
-    ("Be respectful", "No harassment, hate speech, targeted insults, or personal attacks.", 2),
-    ("No spam", "Do not flood channels, mass mention people, or post repetitive content.", 1),
-    ("No scams or malicious links", "Phishing, malware, token grabbers, and suspicious links are not allowed.", 3),
+    ("Be respectful", "No harassment, hate speech, targeted insults, dehumanizing language, or personal attacks.", 2),
+    ("Keep language clean", "Strong profanity and offensive dictator or extremist references are removed in public channels.", 1),
+    ("No spam", "Do not flood channels, mass mention people, repeat the same message, or use bot/app spam.", 1),
+    ("No scams or malicious links", "Phishing, malware, token grabbers, fake giveaways, and suspicious links are not allowed.", 3),
     ("No NSFW outside allowed spaces", "Keep explicit or shocking content out of general areas unless staff approved it.", 2),
-    ("No unsolicited advertising", "Do not self-promote, sell, or post invite links without staff approval.", 1),
-    ("Stay on topic", "Use the correct channels and keep names, nicknames, and profile content appropriate.", 1),
+    ("No unsolicited advertising", "Do not self-promote, sell, post invite links, or drop promo links without staff approval.", 1),
+    ("Stay on topic", "Use the correct channels and keep messages, names, nicknames, and profile content appropriate.", 1),
     ("Do not evade moderation", "Bypassing a timeout, ban, filter, or alt-account restriction is a serious violation.", 3),
     ("Staff discretion applies", "Staff may act to protect the community even when a case is not listed word-for-word.", 1),
 ]

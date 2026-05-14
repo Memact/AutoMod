@@ -16,7 +16,10 @@ community operations:
 - compact `/staff` moderation console for bans, kicks, timeouts, warnings,
   purge, locks, slowmode, case history, and raid cleanup
 - Discord-native AutoMod protection for spam, mention raids, hate-speech
-  presets, and scam-link patterns without bot-side profanity policing
+  presets, and scam-link patterns backed by Memact's local deletion guard
+- Memact local deletion guard for strong profanity, offensive extremist or
+  dictator references, unsolicited invites, promo links, bot/app spam, and
+  repeated message bursts
 - silent Sentinel intelligence for raids, scams, harassment, hate-speech
   patterns, and rolling member risk review
 - security guardrails for anti-nuke detection, audit logging, and SQLite
@@ -40,6 +43,9 @@ This repository's source code is open source under the MIT license. See
   config
 - native Discord AutoMod rules for spam, mention raids, hate-speech presets,
   and known scam-link patterns
+- local Memact Guard deletion for strong profanity, offensive extremist or
+  dictator references, suspicious promos, unsolicited invites, and repeated
+  spam, including messages from installed bots/apps and webhooks
 - silent Sentinel detection for protected-class hate patterns, self-harm
   harassment, scam links, homoglyph domains, misleading markdown links,
   new-account bursts, and mention raids
@@ -113,14 +119,23 @@ In practice:
   keyword engine
 - native Discord AutoMod blocks spam, mention raids, hate-speech slur presets,
   and known scam-link patterns before they become moderation cases
+- Memact's local guard deletes public strong-profanity and offensive-reference
+  messages while intentionally allowing short casual terms such as `wth` and
+  `wtf`
+- installed bots/apps and webhooks are moderated too, so compromised or spammy
+  integrations cannot freely post abusive text, invite links, or promo scams
+- staff-only channels are treated with lighter friction for human moderators,
+  but high-risk scam, hate, raid, and bot/app spam still gets caught and logged
+- every local delete attempt is logged to the moderation log channel with the
+  actor, channel, scope, category, severity, confidence, signals, and excerpt
 - Sentinel quietly records high-signal suspicious messages without deleting,
   warning, timing out, or publicly interrupting the member
 - Sentinel watches for protected-class violent targeting, dehumanization,
   self-harm harassment, scam phrasing, lookalike domains, misleading markdown
   links, mention bursts, and new-account raid patterns
 - Sentinel keeps content hashes, clipped excerpts, signals, confidence,
-  severity, and decaying member risk scores in SQLite so restarts do not erase
-  the review trail
+  severity, action, actor type, channel scope, deletion status, and decaying
+  member risk scores in SQLite so restarts do not erase the review trail
 - manual warnings are staff decisions through `/staff warn`
 - warning revokes are member-friendly through `/staff unwarn_latest`
 - appeals work with or without a case ID
@@ -131,9 +146,10 @@ Useful staff commands:
 - `/automod view`: show Memact Guard native-rule status
 - `/automod toggle`: enable or disable Memact Guard
 - `/automod mention_limit`: tune native mention-raid protection
-- `/security sentinel`: show a member's silent risk profile and recent
-  Sentinel events
-- `/security sentinel_recent`: show the latest high-signal Sentinel events
+- `/security sentinel`: show a member's risk profile plus recent Sentinel and
+  local guard events
+- `/security sentinel_recent`: show the latest high-signal Sentinel and local
+  guard events
 - `/staff warnings`: show a member's active warning points and active warning
   cases
 - `/staff unwarn_latest`: revoke the latest active warning for a member without
@@ -200,8 +216,9 @@ SQLite-backed configuration style as the rest of the bot.
 - `/security view`: show anti-nuke, audit logging, and backup status
 - `/security settings`: tune anti-nuke thresholds, audit logs, and the master
   security switch
-- `/security sentinel`: review one member's silent Sentinel risk profile
-- `/security sentinel_recent`: review recent silent Sentinel detections
+- `/security sentinel`: review one member's Sentinel and local guard profile
+- `/security sentinel_recent`: review recent Sentinel detections and local
+  guard actions
 - `/security backup_create`: create an immediate SQLite backup
 - `/security backup_list`: show recent backup files
 

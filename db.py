@@ -252,6 +252,10 @@ class Database:
                     channel_id INTEGER,
                     message_id INTEGER,
                     category TEXT NOT NULL,
+                    action TEXT NOT NULL DEFAULT 'observe',
+                    actor_kind TEXT NOT NULL DEFAULT 'human',
+                    channel_scope TEXT NOT NULL DEFAULT 'public',
+                    deleted INTEGER NOT NULL DEFAULT 0,
                     severity INTEGER NOT NULL,
                     confidence REAL NOT NULL,
                     summary TEXT NOT NULL,
@@ -272,6 +276,13 @@ class Database:
                 );
                 """
             )
+            for column_name, column_sql in (
+                ("action", "TEXT NOT NULL DEFAULT 'observe'"),
+                ("actor_kind", "TEXT NOT NULL DEFAULT 'human'"),
+                ("channel_scope", "TEXT NOT NULL DEFAULT 'public'"),
+                ("deleted", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                self._ensure_column_locked("sentinel_events", column_name, column_sql)
             for column_name, column_sql in (
                 ("security_enabled", "INTEGER NOT NULL DEFAULT 1"),
                 ("antinuke_enabled", "INTEGER NOT NULL DEFAULT 1"),
@@ -309,6 +320,21 @@ class Database:
                         "INSERT INTO rules (guild_id, position, title, description, points, enabled) VALUES (?, ?, ?, ?, ?, 1)",
                         (guild_id, index, title, description, points),
                     )
+            else:
+                for index, (title, description, points) in enumerate(DEFAULT_RULES, start=1):
+                    cursor = self.connection.execute(
+                        """
+                        UPDATE rules
+                        SET title = ?, description = ?, points = ?
+                        WHERE guild_id = ? AND position = ?
+                        """,
+                        (title, description, points, guild_id, index),
+                    )
+                    if cursor.rowcount == 0:
+                        self.connection.execute(
+                            "INSERT INTO rules (guild_id, position, title, description, points, enabled) VALUES (?, ?, ?, ?, ?, 1)",
+                            (guild_id, index, title, description, points),
+                        )
             self.connection.commit()
 
     def _touch_guild(self, guild_id: int) -> None:
@@ -444,6 +470,10 @@ class Database:
         content_hash: str,
         excerpt: str | None,
         signals: list[dict[str, Any]],
+        action: str = "observe",
+        actor_kind: str = "human",
+        channel_scope: str = "public",
+        deleted: bool = False,
     ) -> int:
         self.ensure_guild(guild_id)
         now = utcnow_iso()
@@ -453,10 +483,11 @@ class Database:
             cursor = self.connection.execute(
                 """
                 INSERT INTO sentinel_events (
-                    guild_id, user_id, channel_id, message_id, category, severity,
-                    confidence, summary, content_hash, excerpt, signals_json, created_at
+                    guild_id, user_id, channel_id, message_id, category, action,
+                    actor_kind, channel_scope, deleted, severity, confidence,
+                    summary, content_hash, excerpt, signals_json, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     guild_id,
@@ -464,6 +495,10 @@ class Database:
                     channel_id,
                     message_id,
                     category,
+                    action,
+                    actor_kind,
+                    channel_scope,
+                    1 if deleted else 0,
                     bounded_severity,
                     bounded_confidence,
                     summary,

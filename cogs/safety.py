@@ -71,8 +71,10 @@ class SafetyCog(commands.Cog):
         channel = f"<#{channel_id}>" if channel_id else "unknown channel"
         created_at = str(event.get("created_at", "unknown time")).replace("+00:00", " UTC")
         summary = self._clip(str(event.get("summary", "-")), 180)
+        action = str(event.get("action", "observe"))
+        deleted = "deleted" if event.get("deleted") else "observed"
         return (
-            f"`#{event['id']}` s{event['severity']} {event['category']} "
+            f"`#{event['id']}` s{event['severity']} {event['category']} {action}/{deleted} "
             f"<@{event['user_id']}> in {channel} - {summary} ({created_at})"
         )
 
@@ -640,7 +642,7 @@ class SafetyCog(commands.Cog):
         )
         await send_interaction(interaction, embed=embed)
 
-    @security.subcommand(description="Show silent Sentinel risk intelligence for a member")
+    @security.subcommand(description="Show Sentinel and local guard intelligence for a member")
     async def sentinel(self, interaction: nextcord.Interaction, member: nextcord.Member) -> None:
         admin = await require_admin(interaction)
         if admin is None:
@@ -652,7 +654,7 @@ class SafetyCog(commands.Cog):
                 interaction,
                 embed=build_embed(
                     "Sentinel Profile",
-                    f"No silent Sentinel events are stored for {member.mention}.",
+                    f"No Sentinel or local guard events are stored for {member.mention}.",
                 ),
             )
             return
@@ -661,7 +663,7 @@ class SafetyCog(commands.Cog):
             interaction,
             embed=build_embed(
                 "Sentinel Profile",
-                "Silent intelligence only. Sentinel does not automatically punish members.",
+                "Review intelligence from silent Sentinel detections and local guard actions.",
                 fields=[
                     ("Member", f"{member.mention} (`{member.id}`)", False),
                     ("Risk Score", f"{float(profile['risk_score']):.1f}/100", True),
@@ -672,7 +674,7 @@ class SafetyCog(commands.Cog):
             ),
         )
 
-    @security.subcommand(description="Show recent silent Sentinel events")
+    @security.subcommand(description="Show recent Sentinel and local guard events")
     async def sentinel_recent(
         self,
         interaction: nextcord.Interaction,
@@ -688,7 +690,7 @@ class SafetyCog(commands.Cog):
             min_severity=min_severity,
         )
         if not events:
-            await send_interaction(interaction, embed=build_embed("Sentinel Events", "No Sentinel events are stored yet."))
+            await send_interaction(interaction, embed=build_embed("Sentinel Events", "No Sentinel or local guard events are stored yet."))
             return
         lines = [self._format_sentinel_event(event) for event in events]
         await send_interaction(
@@ -696,7 +698,7 @@ class SafetyCog(commands.Cog):
             embed=build_embed(
                 "Sentinel Events",
                 "\n".join(lines),
-                footer="Silent review queue. No automatic punishment is applied by Sentinel.",
+                footer="Review queue covering silent detections and logged local guard actions.",
             ),
         )
 
