@@ -250,6 +250,37 @@ class ModerationCog(commands.Cog):
             lines.append(f"Automatic escalation: `{escalation}`.")
         await send_interaction(interaction, embed=build_embed("Warning Logged", "\n".join(lines)))
 
+    @mod.subcommand(description="Show active warning points and recent active warnings")
+    async def warnings(
+        self,
+        interaction: nextcord.Interaction,
+        member: nextcord.Member,
+        limit: int = nextcord.SlashOption(required=False, default=10, min_value=1, max_value=20),
+    ) -> None:
+        moderator = await require_moderator(interaction)
+        if moderator is None:
+            return
+        warnings = self.bot.db.list_active_warning_cases(interaction.guild.id, member.id, limit=limit)
+        total_points = self.bot.db.get_active_warning_points(interaction.guild.id, member.id)
+        if not warnings:
+            await send_interaction(
+                interaction,
+                embed=build_embed("Active Warnings", f"{member.mention} has no active warning points."),
+            )
+            return
+        lines = [
+            f"#{item['id']} | {item['points']} point(s) | {item['reason']} | {item['created_at']}"
+            for item in warnings
+        ]
+        await send_interaction(
+            interaction,
+            embed=build_embed(
+                f"Active Warnings for {member}",
+                "\n".join(lines),
+                fields=[("Active Points", str(total_points), True)],
+            ),
+        )
+
     @mod.subcommand(description="Deactivate a warning by case ID")
     async def unwarn(
         self,
@@ -275,6 +306,54 @@ class ModerationCog(commands.Cog):
             fields=[("Audit Case", str(audit_case_id), True), ("Moderator", moderator.mention, True), ("Reason", reason, False)],
         )
         await send_interaction(interaction, embed=build_embed("Warning Revoked", f"Deactivated warning case #{case_id}.", fields=[("Audit Case", str(audit_case_id), True)]))
+
+    @mod.subcommand(description="Deactivate the latest active warning for a member")
+    async def unwarn_latest(
+        self,
+        interaction: nextcord.Interaction,
+        member: nextcord.Member,
+        reason: str = nextcord.SlashOption(required=False, default="Latest warning revoked."),
+    ) -> None:
+        moderator = await require_moderator(interaction)
+        if moderator is None:
+            return
+        warning = self.bot.db.deactivate_latest_warning_for_member(interaction.guild.id, member.id)
+        if warning is None:
+            await send_interaction(interaction, content=f"{member.mention} has no active warnings to revoke.", ephemeral=True)
+            return
+        audit_case_id = await self.bot.add_case(
+            interaction.guild.id,
+            member.id,
+            moderator.id,
+            "unwarn",
+            reason,
+            active=False,
+            metadata={"target_case": warning["id"], "mode": "latest"},
+        )
+        total_points = self.bot.db.get_active_warning_points(interaction.guild.id, member.id)
+        await self.bot.send_log(
+            interaction.guild,
+            title="Latest Warning Revoked",
+            description=f"The latest active warning for {member.mention} was revoked.",
+            fields=[
+                ("Revoked Warning", str(warning["id"]), True),
+                ("Audit Case", str(audit_case_id), True),
+                ("Active Points Now", str(total_points), True),
+                ("Moderator", moderator.mention, True),
+                ("Reason", reason, False),
+            ],
+        )
+        await send_interaction(
+            interaction,
+            embed=build_embed(
+                "Latest Warning Revoked",
+                f"Revoked warning #{warning['id']} for {member.mention}.",
+                fields=[
+                    ("Audit Case", str(audit_case_id), True),
+                    ("Active Points Now", str(total_points), True),
+                ],
+            ),
+        )
 
     @mod.subcommand(description="Clear all active warnings for a member")
     async def clearwarns(

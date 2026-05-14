@@ -91,7 +91,7 @@ class Database:
                     warn_ban_threshold INTEGER NOT NULL DEFAULT 7,
                     warn_timeout_minutes INTEGER NOT NULL DEFAULT 1440,
                     caps_ratio REAL NOT NULL DEFAULT 0.75,
-                    caps_min_length INTEGER NOT NULL DEFAULT 12,
+                    caps_min_length INTEGER NOT NULL DEFAULT 24,
                     mention_threshold INTEGER NOT NULL DEFAULT 5,
                     spam_threshold INTEGER NOT NULL DEFAULT 6,
                     spam_window_seconds INTEGER NOT NULL DEFAULT 12,
@@ -871,6 +871,54 @@ class Database:
             data.append(item)
         return data
 
+    def list_active_warning_cases(self, guild_id: int, user_id: int, limit: int = 10) -> list[dict[str, Any]]:
+        self.ensure_guild(guild_id)
+        with self._lock:
+            rows = self.connection.execute(
+                """
+                SELECT *
+                FROM cases
+                WHERE guild_id = ? AND user_id = ? AND action = 'warn' AND active = 1
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (guild_id, user_id, limit),
+            ).fetchall()
+        data = []
+        for row in rows:
+            item = dict(row)
+            item["metadata"] = json.loads(item["metadata"])
+            item["active"] = bool(item["active"])
+            data.append(item)
+        return data
+
+    def get_latest_member_case(
+        self,
+        guild_id: int,
+        user_id: int,
+        *,
+        actions: list[str] | None = None,
+        active_only: bool = False,
+    ) -> dict[str, Any] | None:
+        self.ensure_guild(guild_id)
+        query = ["SELECT * FROM cases WHERE guild_id = ? AND user_id = ?"]
+        values: list[Any] = [guild_id, user_id]
+        if actions:
+            placeholders = ",".join("?" for _ in actions)
+            query.append(f"AND action IN ({placeholders})")
+            values.extend(actions)
+        if active_only:
+            query.append("AND active = 1")
+        query.append("ORDER BY id DESC LIMIT 1")
+        with self._lock:
+            row = self.connection.execute(" ".join(query), tuple(values)).fetchone()
+        if row is None:
+            return None
+        data = dict(row)
+        data["metadata"] = json.loads(data["metadata"])
+        data["active"] = bool(data["active"])
+        return data
+
     def search_cases(
         self,
         guild_id: int,
@@ -913,6 +961,18 @@ class Database:
             )
             self.connection.commit()
             return cursor.rowcount > 0
+
+    def deactivate_latest_warning_for_member(self, guild_id: int, user_id: int) -> dict[str, Any] | None:
+        warning = self.get_latest_member_case(guild_id, user_id, actions=["warn"], active_only=True)
+        if warning is None:
+            return None
+        with self._lock:
+            cursor = self.connection.execute(
+                "UPDATE cases SET active = 0 WHERE guild_id = ? AND id = ? AND active = 1",
+                (guild_id, warning["id"]),
+            )
+            self.connection.commit()
+        return warning if cursor.rowcount > 0 else None
 
     def clear_active_warnings_for_member(self, guild_id: int, user_id: int) -> int:
         self.ensure_guild(guild_id)

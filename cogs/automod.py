@@ -20,12 +20,9 @@ from utils.blocklist import (
     fetch_dataset_terms_sync,
     fetch_lenient_terms_sync,
 )
+from utils.moderation_engine import AutomodDecision, evaluate_automod
 from utils.ui import build_embed, send_interaction
 
-
-INVITE_RE = re.compile(r"(discord\.gg|discord\.com/invite)/[A-Za-z0-9-]+", re.IGNORECASE)
-URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
-SUSPICIOUS_LINK_TOKENS = ("discord-gifts", "nitro-free", "steamcomrnunity", "free-nitro", "claim-prize")
 
 PROMO_KEYWORDS = (
     "promo",
@@ -59,19 +56,6 @@ PROMO_KEYWORDS = (
     "commission",
 )
 
-PROMO_PHRASE_RE = re.compile(
-    r"\b("
-    r"join (my|our) (server|discord)"
-    r"|follow (me|us)"
-    r"|subscribe to (my|our)"
-    r"|check out (my|our)"
-    r"|visit (my|our)"
-    r"|use code"
-    r"|limited time"
-    r"|free giveaway"
-    r")\b",
-    re.IGNORECASE,
-)
 PROMO_DATASET_PATH = Path(__file__).resolve().parent.parent / "data" / "promo_keywords.txt"
 
 
@@ -80,6 +64,7 @@ class AutomodCog(commands.Cog):
         self.bot = bot
         self.spam_history: dict[tuple[int, int], deque[float]] = defaultdict(deque)
         self.repeat_history: dict[tuple[int, int], deque[tuple[float, str]]] = defaultdict(deque)
+        self.soft_violation_history: dict[tuple[int, int], deque[float]] = defaultdict(deque)
         self.blocked_word_cache: dict[int, list[tuple[str, re.Pattern[str]]]] = {}
         self._last_history_cleanup_ts = 0.0
         self._dataset_seed_task: asyncio.Task | None = None
@@ -185,6 +170,7 @@ class AutomodCog(commands.Cog):
         key = (guild_id, user_id)
         self.spam_history.pop(key, None)
         self.repeat_history.pop(key, None)
+        self.soft_violation_history.pop(key, None)
 
     async def _assign_join_role(self, member: nextcord.Member, role_id: int) -> bool:
         role = member.guild.get_role(role_id)
@@ -268,37 +254,72 @@ class AutomodCog(commands.Cog):
                 f"in guild {message.guild.id}: {type(error).__name__}: {error}"
             )
 
-    async def _handle_violation(
+    def _record_soft_violation(self, guild_id: int, user_id: int, now_ts: float) -> int:
+        key = (guild_id, user_id)
+        history = self.soft_violation_history[key]
+        history.append(now_ts)
+        while history and now_ts - history[0] > 900:
+            history.popleft()
+        if not history:
+            self.soft_violation_history.pop(key, None)
+        return len(history)
+
+    async def _handle_automod_decision(
         self,
         message: nextcord.Message,
         *,
-        rule_name: str,
-        reason: str,
-        points: int,
+        decision: AutomodDecision,
     ) -> None:
         if not isinstance(message.author, nextcord.Member):
             return
-        try:
-            await message.delete()
-        except (nextcord.Forbidden, nextcord.HTTPException):
-            pass
-        moderator = self.bot.user or message.author
-        await self.bot.apply_warning(
-            message.guild,
-            message.author,
-            moderator=moderator,
-            reason=reason,
-            points=points,
-            source="automod",
-            rule_name=rule_name,
-        )
+        if decision.action == "none":
+            return
 
-    def _caps_ratio(self, text: str) -> tuple[int, float]:
-        letters = [char for char in text if char.isalpha()]
-        if not letters:
-            return 0, 0.0
-        uppercase = sum(1 for char in letters if char.isupper())
-        return len(letters), uppercase / len(letters)
+        if decision.delete_message:
+            try:
+                await message.delete()
+            except (nextcord.Forbidden, nextcord.HTTPException):
+                pass
+
+        warning_points = decision.warn_points
+        soft_count = 0
+        if warning_points <= 0 and decision.soft_strike:
+            soft_count = self._record_soft_violation(
+                message.guild.id,
+                message.author.id,
+                message.created_at.timestamp(),
+            )
+            if soft_count >= 3:
+                warning_points = 1
+
+        if warning_points > 0:
+            moderator = self.bot.user or message.author
+            reason = decision.reason
+            if soft_count >= 3:
+                reason = f"Repeated soft automod violations ({soft_count}/3). Latest: {decision.reason}"
+            await self.bot.apply_warning(
+                message.guild,
+                message.author,
+                moderator=moderator,
+                reason=reason,
+                points=warning_points,
+                source="automod",
+                rule_name="Automod scoring",
+            )
+            return
+
+        action_label = "Deleted" if decision.delete_message else "Logged"
+        await self.bot.send_log(
+            message.guild,
+            title=f"Automod {action_label}",
+            description=decision.reason,
+            fields=[
+                ("Member", message.author.mention, True),
+                ("Channel", message.channel.mention, True),
+                ("Score", f"{decision.score:.1f}", True),
+                ("Signals", ", ".join(signal.kind for signal in decision.signals), False),
+            ],
+        )
 
     def _check_spam(self, guild_id: int, user_id: int, content: str, *, config: dict, now_ts: float) -> tuple[bool, str | None]:
         self._cleanup_history_cache(
@@ -326,20 +347,9 @@ class AutomodCog(commands.Cog):
             if not repeat_history:
                 self.repeat_history.pop(key, None)
             if normalized and sum(1 for _, value in repeat_history if value == normalized) >= config["repeat_threshold"]:
-                return True, "No spam"
+                return True, "Repeat spam"
 
         return False, None
-
-    def _check_promotion(self, guild_id: int, content: str) -> bool:
-        normalized = " ".join(content.lower().split())
-        promo_keywords = set(PROMO_KEYWORDS)
-        promo_keywords.update(self.bot.db.list_promo_keywords(guild_id))
-        multiword_keywords = [term for term in promo_keywords if " " in term]
-        has_url = URL_RE.search(content) is not None
-        if has_url:
-            return any(keyword in normalized for keyword in promo_keywords) or PROMO_PHRASE_RE.search(normalized) is not None
-        return PROMO_PHRASE_RE.search(normalized) is not None or any(term in normalized for term in multiword_keywords)
-
 
     @commands.Cog.listener()
     async def on_message(self, message: nextcord.Message) -> None:
@@ -355,64 +365,8 @@ class AutomodCog(commands.Cog):
         should_run_automod = config["automod_enabled"] and not is_moderator_member(message.author, config)
 
         if should_run_automod and content:
-            normalized_content = content.casefold()
-            for word, pattern in self._get_blocked_word_patterns(message.guild.id):
-                if pattern.search(normalized_content):
-                    await self._handle_violation(
-                        message,
-                        rule_name="Be respectful",
-                        reason=f"Blocked word detected: `{word}`.",
-                        points=2,
-                    )
-                    return
-
-            if any(token in normalized_content for token in SUSPICIOUS_LINK_TOKENS) and URL_RE.search(content):
-                await self._handle_violation(
-                    message,
-                    rule_name="No scams or malicious links",
-                    reason="Suspicious link pattern detected.",
-                    points=3,
-                )
-                return
-
-            if config["invite_filter_enabled"] and INVITE_RE.search(content):
-                await self._handle_violation(
-                    message,
-                    rule_name="No unsolicited advertising",
-                    reason="Invite link detected without approval.",
-                    points=1,
-                )
-                return
-
-            if self._check_promotion(message.guild.id, content):
-                await self._handle_violation(
-                    message,
-                    rule_name="No unsolicited advertising",
-                    reason="Promotional content detected.",
-                    points=1,
-                )
-                return
-
-            if config["mention_filter_enabled"] and len(message.mentions) >= config["mention_threshold"]:
-                await self._handle_violation(
-                    message,
-                    rule_name="No spam",
-                    reason=f"Mass mention detected with {len(message.mentions)} mentions.",
-                    points=1,
-                )
-                return
-
-            if config["caps_filter_enabled"]:
-                letter_count, caps_ratio = self._caps_ratio(content)
-                if letter_count >= config["caps_min_length"] and caps_ratio >= config["caps_ratio"]:
-                    await self._handle_violation(
-                        message,
-                        rule_name="No spam",
-                        reason=f"Excessive caps detected at {caps_ratio:.0%}.",
-                        points=1,
-                    )
-                    return
-
+            spam_triggered = False
+            repeat_triggered = False
             if config["spam_filter_enabled"] or config["repeat_filter_enabled"]:
                 triggered, rule_name = self._check_spam(
                     message.guild.id,
@@ -421,14 +375,30 @@ class AutomodCog(commands.Cog):
                     config=config,
                     now_ts=message.created_at.timestamp(),
                 )
-                if triggered:
-                    await self._handle_violation(
-                        message,
-                        rule_name=rule_name or "No spam",
-                        reason="Spam or repeated message threshold reached.",
-                        points=1,
-                    )
-                    return
+                spam_triggered = bool(triggered and rule_name == "No spam")
+                repeat_triggered = bool(triggered and rule_name != "No spam")
+
+            now = message.created_at
+            account_age_hours = (now - message.author.created_at).total_seconds() / 3600
+            joined_at = message.author.joined_at or now
+            joined_age_hours = (now - joined_at).total_seconds() / 3600
+            promo_keywords = set(PROMO_KEYWORDS)
+            promo_keywords.update(self.bot.db.list_promo_keywords(message.guild.id))
+            decision = evaluate_automod(
+                content=content,
+                config=config,
+                blocked_patterns=self._get_blocked_word_patterns(message.guild.id),
+                promo_keywords=promo_keywords,
+                mention_count=len(message.mentions),
+                account_age_hours=account_age_hours,
+                joined_age_hours=joined_age_hours,
+                has_attachments=bool(message.attachments or message.stickers),
+                spam_triggered=spam_triggered,
+                repeat_triggered=repeat_triggered,
+            )
+            if decision.action != "none":
+                await self._handle_automod_decision(message, decision=decision)
+                return
 
 
         if message.channel.id == INTRO_CHANNEL_ID:
@@ -482,6 +452,8 @@ class AutomodCog(commands.Cog):
             self.spam_history.pop(key, None)
         for key in [key for key in self.repeat_history if key[0] == guild.id]:
             self.repeat_history.pop(key, None)
+        for key in [key for key in self.soft_violation_history if key[0] == guild.id]:
+            self.soft_violation_history.pop(key, None)
         self.blocked_word_cache.pop(guild.id, None)
 
     @nextcord.slash_command(
@@ -513,10 +485,11 @@ class AutomodCog(commands.Cog):
                     ("Spam Filter", "On" if config["spam_filter_enabled"] else "Off", True),
                     ("Repeat Filter", "On" if config["repeat_filter_enabled"] else "Off", True),
                     ("Mention Filter", "On" if config["mention_filter_enabled"] else "Off", True),
+                    ("Mode", "Scored and conservative", True),
                     ("Blocked Words", f"{len(blocked_words)} configured" if blocked_words else "None", False),
                     ("Lenient Words", f"{len(lenient_words)} allowlisted" if lenient_words else "None", False),
                     ("Promo Keywords", f"{len(promo_keywords)} configured" if promo_keywords else "None", False),
-                    ("Caps Threshold", f"{config['caps_ratio']:.0%} with minimum {config['caps_min_length']} letters", False),
+                    ("Caps Threshold", f"{config['caps_ratio']:.0%} with minimum {max(config['caps_min_length'], 24)} letters", False),
                     ("Spam Threshold", f"{config['spam_threshold']} messages / {config['spam_window_seconds']}s", False),
                     ("Repeat Threshold", f"{config['repeat_threshold']} duplicates / {config['repeat_window_seconds']}s", False),
                     ("Mention Threshold", str(config["mention_threshold"]), False),
@@ -775,7 +748,7 @@ class AutomodCog(commands.Cog):
         self,
         interaction: nextcord.Interaction,
         caps_ratio_percent: int = nextcord.SlashOption(required=False, default=75, min_value=1, max_value=100),
-        caps_min_length: int = nextcord.SlashOption(required=False, default=12, min_value=1, max_value=200),
+        caps_min_length: int = nextcord.SlashOption(required=False, default=24, min_value=24, max_value=200),
         mention_threshold: int = nextcord.SlashOption(required=False, default=5, min_value=1, max_value=50),
         spam_threshold: int = nextcord.SlashOption(required=False, default=6, min_value=2, max_value=50),
         spam_window_seconds: int = nextcord.SlashOption(required=False, default=12, min_value=2, max_value=300),

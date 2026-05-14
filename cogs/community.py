@@ -266,20 +266,37 @@ class CommunityCog(commands.Cog):
     async def appeal(
         self,
         interaction: nextcord.Interaction,
-        case_id: int,
         reason: str,
+        case_id: int = nextcord.SlashOption(
+            required=False,
+            default=0,
+            description="Optional. Leave blank to appeal your latest moderation case.",
+        ),
     ) -> None:
         if interaction.guild is None:
             await send_interaction(interaction, content="This command only works inside a server.", ephemeral=True)
             return
         config = self.bot.db.get_guild_config(interaction.guild.id)
-        case = self.bot.db.get_case(interaction.guild.id, case_id)
+        if case_id:
+            case = self.bot.db.get_case(interaction.guild.id, case_id)
+        else:
+            case = self.bot.db.get_latest_member_case(
+                interaction.guild.id,
+                interaction.user.id,
+                actions=["warn", "timeout", "kick", "ban"],
+                active_only=True,
+            )
         if case is None:
-            await send_interaction(interaction, content="That case ID was not found.", ephemeral=True)
+            await send_interaction(
+                interaction,
+                content="I couldn't find an active moderation case for you. Add a case ID if staff gave you one.",
+                ephemeral=True,
+            )
             return
         if case["user_id"] != interaction.user.id:
             await send_interaction(interaction, content="You can only appeal your own moderation cases.", ephemeral=True)
             return
+        resolved_case_id = int(case["id"])
         channels = self._resolve_ticket_channels(interaction.guild, config["appeal_channel_id"])
         if not channels:
             await send_interaction(interaction, content="The ticket channel could not be found.", ephemeral=True)
@@ -289,7 +306,7 @@ class CommunityCog(commands.Cog):
             kind="appeal",
             text=reason,
             target_id=case["user_id"],
-            case_id=case_id,
+            case_id=resolved_case_id,
             evidence_url=None,
         ):
             return
@@ -299,7 +316,7 @@ class CommunityCog(commands.Cog):
             interaction.user.id,
             case["user_id"],
             reason,
-            case_id=case_id,
+            case_id=resolved_case_id,
         )
         embed = self._build_ticket_embed(
             title="New Ticket",
@@ -308,14 +325,14 @@ class CommunityCog(commands.Cog):
             kind="Appeal",
             author=interaction.user,
             fields=[
-                ("Case ID", str(case_id), True),
+                ("Case ID", str(resolved_case_id), True),
                 ("Original Action", case["action"], True),
                 ("Original Reason", case["reason"], False),
             ],
         )
         for channel in channels:
             await channel.send(embed=embed)
-        await send_interaction(interaction, embed=build_embed("Appeal Submitted", f"Your appeal for case #{case_id} has been sent to the moderators."))
+        await send_interaction(interaction, embed=build_embed("Appeal Submitted", f"Your appeal for case #{resolved_case_id} has been sent to the moderators."))
 
     @nextcord.slash_command(name="raise", description="Raise a ticket for the moderators", guild_ids=COMMAND_GUILD_IDS)
     async def raise_ticket(

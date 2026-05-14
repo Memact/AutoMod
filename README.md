@@ -15,8 +15,8 @@ community operations:
 
 - slash-command moderation for bans, kicks, timeouts, warnings, purge, locks,
   slowmode, nicknames, and role tools
-- automod protections for spam, duplicate messages, invite links, blocked
-  words, caps abuse, mention flooding, and raid-mode responses
+- context-aware automod protections for spam, duplicate messages, suspicious
+  links, invite abuse, blocked words, mention flooding, and raid-mode responses
 - security guardrails for anti-nuke detection, audit logging, and SQLite
   backups
 - startup seeding for bundled and curated automod datasets after deploys or
@@ -38,8 +38,8 @@ This repository's source code is open source under the MIT license. See
   slowmode, nicknames, and role tools
 - SQLite-backed case history, warning points, temp-ban scheduling, and server
   config
-- automod for spam, duplicate messages, invite links, blocked words, caps, and
-  mention flooding
+- scoring-based automod for spam, duplicate messages, suspicious links, invite
+  abuse, blocked words, caps context, and mention flooding
 - anti-nuke protection for destructive server bursts such as mass bans, kicks,
   channel deletes, and role deletes
 - richer audit logging for message edits/deletes, role changes, channel
@@ -93,6 +93,38 @@ public Bluesky account into the fixed Discord channel `1490277253949558975`.
 
 The relay uses Bluesky's public AppView HTTP endpoint, so no extra Bluesky
 credentials are required for read-only mirroring.
+
+## Moderation Model
+
+Memact AutoMod uses a conservative scoring model instead of warning members for
+every single keyword or formatting trigger. The bot weighs message context,
+member trust, account age, join age, links, mentions, repeated behavior, and
+raid mode before deciding what to do.
+
+In practice:
+
+- all-caps text alone does not create warning points
+- GIFs and normal media-only messages are ignored by automod
+- words such as casino, sale, promo, or giveaway are not punished by themselves
+- invite links and promotional links are usually deleted/logged first, not
+  instantly converted into warning points
+- repeated soft violations can become a warning if the same member keeps doing
+  it in a short window
+- scam-link patterns, message floods, repeated spam, and mass mentions still
+  trigger stronger actions
+
+Useful staff commands:
+
+- `/automod view`: show current automod mode and thresholds
+- `/automod toggle`: enable or disable specific filters
+- `/mod warnings`: show a member's active warning points and active warning
+  cases
+- `/mod unwarn_latest`: revoke the latest active warning for a member without
+  hunting for a case ID
+- `/mod unwarn`: revoke a specific warning when staff already know the case ID
+- `/mod clearwarns`: clear all active warnings for a member
+- `/appeal reason:<text>`: appeal the user's latest active moderation case
+- `/appeal reason:<text> case_id:<id>`: appeal a specific case
 
 ### Persistence
 
